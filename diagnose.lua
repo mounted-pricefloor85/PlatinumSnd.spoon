@@ -346,12 +346,19 @@ local function scratchPath()
 end
 
 -- Ours, by content rather than by name.
+--
+-- An EMPTY file at this exact path counts as ours too. io.open creates the
+-- file before anything is written to it, and a write that fails -- a full
+-- disk is the realistic one -- leaves nothing in it: recognising only the
+-- marker would strand a zero-byte file of our own making that no sweep could
+-- ever pick up. Nothing of the user's is at risk in that rule, because a
+-- zero-byte file is not data.
 local function isOurScratch(path)
   local file = io.open(path, "r")
   if not file then return false end
   local ok, first = pcall(function() return file:read("l") end)
   pcall(function() file:close() end)
-  return ok and first == C.scratchMarker
+  return ok and (first == C.scratchMarker or first == nil)
 end
 
 -- Whether anything is at that path at all, ours or not.
