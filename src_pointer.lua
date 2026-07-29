@@ -29,31 +29,40 @@ function src:start(ctx)
     self.lastX, self.lastY = pos.x, pos.y
 
     local pid = frontmostPid()
+    local now = hs.timer.secondsSinceEpoch()
     local cached = self.cache
 
     -- Frame elision. While the cursor is still inside the bounds the last
     -- probe reported, and the same app is still frontmost, the role under
     -- the cursor cannot have changed -- so there is nothing to ask, and no
-    -- IPC to pay for. Only leaving the frame, a change of frontmost app, or
-    -- an element that never published a frame costs a round-trip. Without
-    -- this the loop probes into another process up to 16 times a second for
-    -- as long as the cursor keeps moving, nearly all of it re-asking a
-    -- question whose answer it already holds.
+    -- IPC to pay for. Only leaving the frame, a change of frontmost app, an
+    -- element that never published a frame, or the revalidation ceiling
+    -- costs a round-trip. Without this the loop probes into another process
+    -- up to 16 times a second for as long as the cursor keeps moving,
+    -- nearly all of it re-asking a question whose answer it already holds.
     if cached and cached.pid == pid
-      and axpolicy.isInsideFrame(cached.frame, pos.x, pos.y) then
-      -- Carry the sample point forward. Containment is a stronger claim
-      -- than the cache's pixel tolerance -- it is the widget's real extent
-      -- rather than a proxy for it -- so the click path can trust the role
-      -- at this new point. `at` deliberately stays put: it records when the
-      -- app last answered a question, and this branch asked none.
-      cached.x, cached.y = pos.x, pos.y
+      and axpolicy.isInsideFrame(cached.frame, pos.x, pos.y)
+      and not axpolicy.needsRevalidation(cached, now, self.tuning) then
+      -- A successful elision is a revalidation, not a stale sample: it has
+      -- just confirmed the cursor is inside the same element's frame with
+      -- the same app frontmost, which is stronger evidence than the sample
+      -- being under cacheMaxAgeSeconds old. So move the sample point and
+      -- the validation stamp forward, and leave `probedAt` alone -- that is
+      -- what the ceiling above measures, and what stops a role living
+      -- indefinitely on containment alone. Without this refresh a click
+      -- after a quarter-second of movement inside one widget would fall to
+      -- the deferred probe, which is the path that mis-sounds menu items.
+      cached.x, cached.y, cached.at = pos.x, pos.y, now
       return
     end
 
     local role, probedPid, frame = self.probe:roleAt(pos.x, pos.y)
     local previous = cached and cached.role
+    -- Read the clock again: roleAt may have blocked for up to the AX
+    -- timeout, and both stamps should say when the app actually answered.
+    local sampled = hs.timer.secondsSinceEpoch()
     self.cache = {role = role, pid = probedPid, x = pos.x, y = pos.y,
-                  frame = frame, at = hs.timer.secondsSinceEpoch()}
+                  frame = frame, at = sampled, probedAt = sampled}
 
     -- Transitions are by role, not by element: crossing between two buttons
     -- in a toolbar is silent, which is what stops a sweep along one from

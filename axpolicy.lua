@@ -36,6 +36,25 @@ function axpolicy.isInsideFrame(frame, x, y)
   return x >= fx and x < fx + fw and y >= fy and y < fy + fh
 end
 
+-- The ceiling on how long a role may survive on frame containment alone.
+--
+-- A successful elision refreshes the cache's `at`, because confirming the
+-- cursor is still inside the same element's frame with the same app
+-- frontmost is stronger evidence than "the sample is under a quarter of a
+-- second old". That would otherwise let a role live forever, and a UI can
+-- change under a resting cursor -- a button replaced in place by a progress
+-- bar keeps the same bounds and reports a different role. So `probedAt`
+-- records when an app was last actually asked, an elision never touches it,
+-- and this caps the drift at cacheRevalidateSeconds.
+--
+-- A cache with no probedAt at all reads as due, so any path that builds one
+-- without going through a probe degrades to asking rather than to trusting.
+function axpolicy.needsRevalidation(cache, now, tuning)
+  if not cache then return true end
+  if type(cache.probedAt) ~= "number" then return true end
+  return now - cache.probedAt > tuning.cacheRevalidateSeconds
+end
+
 local Breaker = {}
 Breaker.__index = Breaker
 

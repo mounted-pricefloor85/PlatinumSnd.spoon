@@ -14,6 +14,7 @@ obj.tuning = {
   hoverIntervalSeconds   = 0.06,
   cacheMaxAgeSeconds     = 0.25,
   cacheTolerancePx       = 4,
+  cacheRevalidateSeconds = 2,
   axTimeoutSeconds       = 0.05,
   breakerThreshold       = 3,
   breakerWindowSeconds   = 10,

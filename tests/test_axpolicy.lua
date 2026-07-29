@@ -6,6 +6,7 @@ local t = runner.suite("axpolicy")
 local TUNING = {
   cacheMaxAgeSeconds     = 0.25,
   cacheTolerancePx       = 4,
+  cacheRevalidateSeconds = 2,
   breakerThreshold       = 3,
   breakerWindowSeconds   = 10,
   breakerCooldownSeconds = 30,
@@ -100,6 +101,102 @@ t.test("budget recovers once old samples age out", function()
   runner.eq(b:isOverBudget(101.6), false)
 end)
 
+-- Frame containment. This is the hover loop's IPC elision test: while the
+-- cursor sits inside the frame the last probe reported, the answer cannot
+-- have changed, so no round trip into the app is needed.
+--
+-- The rectangle is half-open: the top and left edges belong to it, the
+-- bottom and right edges belong to the next widget along. That matches how
+-- adjacent AX frames tile a window without overlapping, and it makes a
+-- zero-size frame contain nothing at all rather than pinning the cache to a
+-- single degenerate point.
+local FRAME = {x = 10, y = 20, w = 100, h = 50}
+
+t.test("a point well inside the frame is inside", function()
+  runner.isTrue(axpolicy.isInsideFrame(FRAME, 50, 40))
+end)
+
+t.test("a point left of the frame is outside", function()
+  runner.eq(axpolicy.isInsideFrame(FRAME, 9, 40), false)
+end)
+
+t.test("a point right of the frame is outside", function()
+  runner.eq(axpolicy.isInsideFrame(FRAME, 111, 40), false)
+end)
+
+t.test("a point above the frame is outside", function()
+  runner.eq(axpolicy.isInsideFrame(FRAME, 50, 19), false)
+end)
+
+t.test("a point below the frame is outside", function()
+  runner.eq(axpolicy.isInsideFrame(FRAME, 50, 71), false)
+end)
+
+t.test("the top left edge is inside, the bottom right edge is not", function()
+  runner.isTrue(axpolicy.isInsideFrame(FRAME, 10, 20))
+  runner.eq(axpolicy.isInsideFrame(FRAME, 110, 40), false)
+  runner.eq(axpolicy.isInsideFrame(FRAME, 50, 70), false)
+end)
+
+t.test("a nil frame is never a containment", function()
+  runner.eq(axpolicy.isInsideFrame(nil, 50, 40), false)
+end)
+
+t.test("a zero size frame contains nothing, not even its origin", function()
+  runner.eq(axpolicy.isInsideFrame({x = 10, y = 20, w = 0, h = 0}, 10, 20),
+            false)
+end)
+
+t.test("a frame missing width and height is never a containment", function()
+  runner.eq(axpolicy.isInsideFrame({x = 10, y = 20}, 10, 20), false)
+end)
+
+-- Revalidation ceiling. A successful frame elision refreshes the cache's
+-- `at`, so the click path keeps seeing a fresh cache for as long as the
+-- cursor rests on one control. That is only safe because the ceiling below
+-- caps how long a role can survive without the app being asked again: the
+-- UI can change under a stationary cursor, and `probedAt` -- set only by a
+-- real probe, never by an elision -- is what notices.
+local function probed(over)
+  local c = {role = "AXButton", pid = 42, x = 100, y = 200,
+             at = 1000.0, probedAt = 1000.0}
+  for k, v in pairs(over or {}) do c[k] = v end
+  return c
+end
+
+t.test("a recently probed cache needs no revalidation", function()
+  runner.eq(axpolicy.needsRevalidation(probed(), 1001.0, TUNING), false)
+end)
+
+t.test("a cache probed beyond the ceiling needs revalidation", function()
+  runner.isTrue(axpolicy.needsRevalidation(probed(), 1002.1, TUNING))
+end)
+
+t.test("exactly at the ceiling does not yet need revalidation", function()
+  runner.eq(axpolicy.needsRevalidation(probed(), 1002.0, TUNING), false)
+end)
+
+-- The ceiling must read probedAt, not at. A cache kept alive by a long run
+-- of elisions has a fresh `at` and a stale `probedAt`; reading `at` here
+-- would let a wrong role survive forever, which is the whole bug the
+-- ceiling exists to bound.
+t.test("a long run of elisions still trips the ceiling", function()
+  runner.isTrue(axpolicy.needsRevalidation(probed({at = 1009.9}), 1010.0,
+                                           TUNING))
+end)
+
+t.test("a nil cache needs revalidation", function()
+  runner.isTrue(axpolicy.needsRevalidation(nil, 1000.0, TUNING))
+end)
+
+-- Spelled out rather than built with probed({probedAt = nil}): a nil value
+-- in a Lua table constructor creates no key, so that override would have
+-- been a silent no-op and this case would have tested nothing.
+t.test("a cache with no probedAt needs revalidation", function()
+  local unprobed = {role = "AXButton", pid = 42, x = 100, y = 200, at = 1000.0}
+  runner.isTrue(axpolicy.needsRevalidation(unprobed, 1000.0, TUNING))
+end)
+
 -- Regression guard. Every case above feeds TUNING, whose values are the
 -- production ones, so a module that inlined those same literals and ignored
 -- the table entirely would still pass all of them. The cases below feed
@@ -154,56 +251,6 @@ t.test("breakerCooldownSeconds is read from tuning, not inlined", function()
   runner.eq(b:isOpen(7, 105), false)
 end)
 
--- Frame containment. This is the hover loop's IPC elision test: while the
--- cursor sits inside the frame the last probe reported, the answer cannot
--- have changed, so no round trip into the app is needed.
---
--- The rectangle is half-open: the top and left edges belong to it, the
--- bottom and right edges belong to the next widget along. That matches how
--- adjacent AX frames tile a window without overlapping, and it makes a
--- zero-size frame contain nothing at all rather than pinning the cache to a
--- single degenerate point.
-local FRAME = {x = 10, y = 20, w = 100, h = 50}
-
-t.test("a point well inside the frame is inside", function()
-  runner.isTrue(axpolicy.isInsideFrame(FRAME, 50, 40))
-end)
-
-t.test("a point left of the frame is outside", function()
-  runner.eq(axpolicy.isInsideFrame(FRAME, 9, 40), false)
-end)
-
-t.test("a point right of the frame is outside", function()
-  runner.eq(axpolicy.isInsideFrame(FRAME, 111, 40), false)
-end)
-
-t.test("a point above the frame is outside", function()
-  runner.eq(axpolicy.isInsideFrame(FRAME, 50, 19), false)
-end)
-
-t.test("a point below the frame is outside", function()
-  runner.eq(axpolicy.isInsideFrame(FRAME, 50, 71), false)
-end)
-
-t.test("the top left edge is inside, the bottom right edge is not", function()
-  runner.isTrue(axpolicy.isInsideFrame(FRAME, 10, 20))
-  runner.eq(axpolicy.isInsideFrame(FRAME, 110, 40), false)
-  runner.eq(axpolicy.isInsideFrame(FRAME, 50, 70), false)
-end)
-
-t.test("a nil frame is never a containment", function()
-  runner.eq(axpolicy.isInsideFrame(nil, 50, 40), false)
-end)
-
-t.test("a zero size frame contains nothing, not even its origin", function()
-  runner.eq(axpolicy.isInsideFrame({x = 10, y = 20, w = 0, h = 0}, 10, 20),
-            false)
-end)
-
-t.test("a frame missing width and height is never a containment", function()
-  runner.eq(axpolicy.isInsideFrame({x = 10, y = 20}, 10, 20), false)
-end)
-
 t.test("the probe budget and window are read from tuning, not inlined", function()
   local wide = axpolicy.newBreaker(tuned({probeWindowSeconds = 10}))
   wide:noteProbeTime(0.04, 100.0); wide:noteProbeTime(0.04, 100.2)
@@ -213,6 +260,13 @@ t.test("the probe budget and window are read from tuning, not inlined", function
   rich:noteProbeTime(0.04, 100.0); rich:noteProbeTime(0.04, 100.2)
   rich:noteProbeTime(0.04, 100.4)
   runner.eq(rich:isOverBudget(100.4), false)
+end)
+
+t.test("cacheRevalidateSeconds is read from tuning, not inlined", function()
+  local patient = tuned({cacheRevalidateSeconds = 60})
+  runner.eq(axpolicy.needsRevalidation(probed(), 1005.0, patient), false)
+  local eager = tuned({cacheRevalidateSeconds = 0.5})
+  runner.isTrue(axpolicy.needsRevalidation(probed(), 1001.0, eager))
 end)
 
 return t
