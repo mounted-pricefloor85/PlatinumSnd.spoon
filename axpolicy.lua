@@ -55,6 +55,19 @@ function axpolicy.needsRevalidation(cache, now, tuning)
   return now - cache.probedAt > tuning.cacheRevalidateSeconds
 end
 
+-- Whether a role change has earned its exit/enter pair.
+--
+-- A probe that could not answer -- a hung app, a tripped breaker, a budget
+-- overrun -- comes back with no role at all, which looks identical to the
+-- cursor having moved onto nothing. It is not: "could not ask" is not "the
+-- cursor left the widget". Sounding an exit there gives a phantom blip on a
+-- control the pointer is still resting on, so only a probe that actually
+-- answered may drive a transition.
+function axpolicy.transitionSounds(previousRole, newRole, probeSucceeded)
+  if not probeSucceeded then return false end
+  return previousRole ~= newRole
+end
+
 local Breaker = {}
 Breaker.__index = Breaker
 

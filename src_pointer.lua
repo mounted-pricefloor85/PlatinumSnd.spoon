@@ -25,12 +25,31 @@ function src:start(ctx)
   -- for slowness and cannot delay input.
   self.timer = hs.timer.doEvery(ctx.tuning.hoverIntervalSeconds, function()
     local pos = hs.mouse.absolutePosition()
-    if self.lastX == pos.x and self.lastY == pos.y then return end
+    local cached = self.cache
+
+    -- A motionless cursor over an unchanged frontmost app is the strongest
+    -- evidence there is that the cached role still applies -- stronger than
+    -- a moving one inside a frame -- so refresh the validation stamp and
+    -- stop. Hovering a control, pausing, then clicking is the commonest
+    -- interaction there is, and without this the pause alone would age the
+    -- cache out and drop the click onto the deferred probe.
+    --
+    -- No probe, no IPC, not even an AXFrame read, and deliberately no
+    -- revalidation ceiling: a resting cursor costing nothing is a property
+    -- worth more than bounding a stale role here. The only way that bites
+    -- is a UI mutating under a parked pointer that is then clicked without
+    -- moving first, which costs one wrong sound. The first nudge in any
+    -- direction puts the ceiling back in charge.
+    if self.lastX == pos.x and self.lastY == pos.y then
+      if cached and cached.pid == frontmostPid() then
+        cached.at = hs.timer.secondsSinceEpoch()
+      end
+      return
+    end
     self.lastX, self.lastY = pos.x, pos.y
 
     local pid = frontmostPid()
     local now = hs.timer.secondsSinceEpoch()
-    local cached = self.cache
 
     -- Frame elision. While the cursor is still inside the bounds the last
     -- probe reported, and the same app is still frontmost, the role under
@@ -58,16 +77,25 @@ function src:start(ctx)
 
     local role, probedPid, frame = self.probe:roleAt(pos.x, pos.y)
     local previous = cached and cached.role
-    -- Read the clock again: roleAt may have blocked for up to the AX
-    -- timeout, and both stamps should say when the app actually answered.
-    local sampled = hs.timer.secondsSinceEpoch()
-    self.cache = {role = role, pid = probedPid, x = pos.x, y = pos.y,
-                  frame = frame, at = sampled, probedAt = sampled}
+
+    -- roleAt answers with no role when it could not ask: hung app, tripped
+    -- breaker, budget overrun. Leave the whole cache alone in that case --
+    -- role, frame and both stamps. Overwriting the role would throw away
+    -- the best evidence available for the next click, and refusing to
+    -- advance the stamps is what keeps the ceiling due, so the next tick
+    -- tries again rather than settling for the failure.
+    if role ~= nil then
+      -- Read the clock again: roleAt may have blocked for up to the AX
+      -- timeout, and both stamps should say when the app actually answered.
+      local sampled = hs.timer.secondsSinceEpoch()
+      self.cache = {role = role, pid = probedPid, x = pos.x, y = pos.y,
+                    frame = frame, at = sampled, probedAt = sampled}
+    end
 
     -- Transitions are by role, not by element: crossing between two buttons
     -- in a toolbar is silent, which is what stops a sweep along one from
     -- machine-gunning btne.
-    if role ~= previous then
+    if axpolicy.transitionSounds(previous, role, role ~= nil) then
       local left = rolemap.semantic(previous, "exit")
       if left then self.engine:play(left) end
       local entered = rolemap.semantic(role, "enter")

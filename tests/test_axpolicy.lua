@@ -197,6 +197,31 @@ t.test("a cache with no probedAt needs revalidation", function()
   runner.isTrue(axpolicy.needsRevalidation(unprobed, 1000.0, TUNING))
 end)
 
+-- Whether a role change earns its exit/enter pair. The third argument is
+-- what stops a hung app or a tripped breaker sounding like the cursor left
+-- a control it is still sitting on.
+t.test("a changed role after a successful probe sounds", function()
+  runner.isTrue(axpolicy.transitionSounds("AXButton", "AXCheckBox", true))
+end)
+
+t.test("an unchanged role after a successful probe is silent", function()
+  runner.eq(axpolicy.transitionSounds("AXButton", "AXButton", true), false)
+end)
+
+t.test("arriving from no previous role sounds", function()
+  runner.isTrue(axpolicy.transitionSounds(nil, "AXButton", true))
+end)
+
+-- The bug this predicate exists for: the probe came back empty, so the role
+-- looks like it changed to nothing, but nothing is known to have moved.
+t.test("a failed probe never sounds, however different the role", function()
+  runner.eq(axpolicy.transitionSounds("AXButton", nil, false), false)
+end)
+
+t.test("a failed probe with no previous role is silent too", function()
+  runner.eq(axpolicy.transitionSounds(nil, nil, false), false)
+end)
+
 -- Regression guard. Every case above feeds TUNING, whose values are the
 -- production ones, so a module that inlined those same literals and ignored
 -- the table entirely would still pass all of them. The cases below feed
