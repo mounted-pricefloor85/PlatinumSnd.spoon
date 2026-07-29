@@ -99,6 +99,17 @@ local C = {
   consoleWaitSeconds    = 1,
   launchWaitSeconds     = 4,
   finderWaitSeconds     = 1.8,
+  -- How often F8 looks at the tape while its scratch file is on disk. The
+  -- file comes off as soon as the sound it was created to provoke arrives,
+  -- so this is what decides how long it exists in the ordinary case: the
+  -- coalesce window plus one poll, rather than the full wait above.
+  finderPollSeconds     = 0.1,
+  -- The scratch file guided step F8 creates. ONE FIXED NAME, deliberately:
+  -- see the scratch section below for why a clock-stamped name could not be
+  -- swept up again without globbing a directory of the user's.
+  scratchName           = "platinumsnd-diagnostic-scratch.tmp",
+  scratchMarker         = "PlatinumSnd diagnostics scratch file; safe to "
+                          .. "delete",
   -- Used only if it is installed and NOT already running, launched WITHOUT
   -- activation, and quit again by the exact pid that appeared. Calculator
   -- alone, deliberately: it owns no documents, so quitting it can neither
@@ -288,6 +299,114 @@ local function round(n)
   return math.floor(n + 0.5)
 end
 
+-- ------------------------------------------------------- the scratch file
+
+-- Guided step F8 is the only thing in this harness that writes anywhere but
+-- the report, and it writes under the user's Desktop because that is where
+-- the Finder source is watching. The run it writes during is one a person is
+-- being asked to act in, so BEING INTERRUPTED IS NORMAL -- a reload, a quit,
+-- a hand on the wrong key -- and "the run was cut short" is not an excuse for
+-- leaving a file of ours behind. It happened once already.
+--
+-- Four mechanisms, because each closes a hole the others leave open:
+--
+--   1. the step itself removes the file in the same callback that first sees
+--      the sound it was created to provoke (H:guidedFinderFile);
+--   2. restore() -- the finally block -- removes it on any error, watchdog
+--      or dead man's timer that ends the run early;
+--   3. hs.shutdownCallback removes it if the Lua environment is torn down
+--      mid-run, chained so that whatever the config had there still runs;
+--   4. the NEXT run sweeps it before anything else, and reports having done
+--      so.
+--
+-- (4) exists because (3) cannot be relied on. Hammerspoon documents
+-- hs.shutdownCallback as firing when the Lua environment is destroyed,
+-- including on a reload -- but a crash, a force quit, or a config that
+-- installs its own handler after this one all skip it, and the run that
+-- prompted all this was ended by a reload with a file still on the Desktop.
+-- A cleanup that only works when the process is shut down politely is not a
+-- cleanup.
+--
+-- (4) is also why the name is FIXED. Whatever destroys the Lua state takes
+-- every in-memory record with it -- this file is dofile'd fresh on every
+-- :diagnose(), so even the table below is new each run -- which leaves the
+-- file on disk as its own record. A clock-stamped name could only be found
+-- again by globbing a directory of the user's, and this harness does not
+-- glob: it removes ONE known path, and only after reading the first line back
+-- and matching the marker it wrote, so a file of theirs that happens to share
+-- the name is recognised as not ours and left exactly where it is.
+local scratch = {
+  path = nil,             -- outstanding: on disk right now, ours to remove
+  shutdown = nil,         -- the callback we installed, while one is installed
+  previousShutdown = nil, -- whatever was there before, called after ours
+}
+
+local function scratchPath()
+  return (os.getenv("HOME") or "") .. C.reportDir .. "/" .. C.scratchName
+end
+
+-- Ours, by content rather than by name.
+local function isOurScratch(path)
+  local file = io.open(path, "r")
+  if not file then return false end
+  local ok, first = pcall(function() return file:read("l") end)
+  pcall(function() file:close() end)
+  return ok and first == C.scratchMarker
+end
+
+-- Whether anything is at that path at all, ours or not.
+local function scratchExists(path)
+  local file = io.open(path, "r")
+  if not file then return false end
+  pcall(function() file:close() end)
+  return true
+end
+
+local function disarmShutdownSweep()
+  if not scratch.shutdown then return end
+  -- Only put ours back if it is still ours to put back: a config that
+  -- installed its own during the run keeps it.
+  if hs.shutdownCallback == scratch.shutdown then
+    hs.shutdownCallback = scratch.previousShutdown
+  end
+  scratch.shutdown, scratch.previousShutdown = nil, nil
+end
+
+local function armShutdownSweep()
+  if scratch.shutdown then return end
+  scratch.previousShutdown = hs.shutdownCallback
+  scratch.shutdown = function()
+    if scratch.path and isOurScratch(scratch.path) then
+      pcall(os.remove, scratch.path)
+    end
+    if type(scratch.previousShutdown) == "function" then
+      pcall(scratch.previousShutdown)
+    end
+  end
+  hs.shutdownCallback = scratch.shutdown
+end
+
+-- Remove the outstanding scratch file NOW, by exact name. Returns nil when
+-- there was nothing of ours to remove, true when it went, or false and the
+-- reason when it would not go. Called from the step, from restore(), and
+-- from the next run's sweep, so it must be safe to call at any time.
+local function takeScratch(path)
+  path = path or scratch.path
+  local outstanding = (path ~= nil) and (path == scratch.path)
+  if not path or not isOurScratch(path) then
+    if outstanding then scratch.path = nil end
+    disarmShutdownSweep()
+    return nil
+  end
+  local ok, err = os.remove(path)
+  if ok then
+    if outstanding then scratch.path = nil end
+    disarmShutdownSweep()
+    return true
+  end
+  return false, tostring(err)
+end
+
 -- ------------------------------------------------------------- the harness
 
 local H = {}
@@ -303,6 +422,8 @@ function H.new(obj, opts)
     steps = {},
     log = {},        -- the recording shim's tape
     found = {},      -- Phase C: role key -> {element, frame, role}
+    swept = {},      -- scratch files a previous run left behind
+    scratchLeft = {},-- still on disk at the end, shouted about in the summary
     stepIndex = 0,
   }, H)
 end
@@ -327,6 +448,22 @@ function H:record(status, id, text)
     table.insert(self.problems, line)
   end
   return line
+end
+
+-- A path this run could not get off disk. Recorded rather than only printed,
+-- because the summary shouts about these and the phase body scrolls past.
+--
+-- False when the path is already on the list, which is how the retry in
+-- restore() reports nothing the step has already said: one file, one line,
+-- however many times the harness tried to remove it.
+function H:scratchStillThere(path, why)
+  for _, known in ipairs(self.scratchLeft) do
+    if known == path then return false end
+  end
+  table.insert(self.scratchLeft, path)
+  print("PlatinumSnd diagnose: could not remove " .. path
+    .. (why and (" (" .. tostring(why) .. ")") or ""))
+  return true
 end
 
 function H:pass(id, text) return self:record("PASS", id, text) end
@@ -479,6 +616,24 @@ end
 
 function H:phaseA(done)
   self:heading("Phase A -- environment and assets")
+
+  -- What the entry sweep found, if anything. No line at all when there was
+  -- nothing to sweep: this is a report of something that happened, not a
+  -- check that can pass.
+  for _, item in ipairs(self.swept) do
+    if item.foreign then
+      self:warn("A0", "a file with this harness's scratch name is on your "
+        .. "Desktop but was NOT written by it, so it has been left alone: "
+        .. item.path .. " -- guided step F8 will not run while it is there")
+    elseif item.removed then
+      self:warn("A0", "an earlier run was interrupted before it could remove "
+        .. "its scratch file. This run removed it: " .. item.path)
+    elseif self:scratchStillThere(item.path, item.err) then
+      self:fail("A0", "an earlier run left its scratch file behind and this "
+        .. "run could not remove it either: " .. item.path .. " ("
+        .. tostring(item.err) .. ") -- delete it yourself")
+    end
+  end
 
   local osVersion = self.env.osVersion
   self:verdict(osVersion ~= nil, "A1", "macOS version: " .. tostring(osVersion))
@@ -1040,6 +1195,51 @@ function H:phaseC(done)
   end)
 end
 
+-- Divergences between the role the walk matched and the role the probe
+-- answered that are the design working rather than a defect.
+--
+-- Keyed walked-role -> observed-role. `when`, where present, must also agree
+-- that the refinement had a reason to fire on THIS element, so that an
+-- unexplained AXTab still warns: a plain radio button that probes as a tab
+-- would be a real bug and this table must not swallow it.
+local EXPLAINED = {
+  AXRadioButton = {
+    AXTab = {
+      when = function(entry)
+        return att(att(entry.element, "AXParent"), "AXRole") == "AXTabGroup"
+      end,
+      why = "a macOS tab IS an AXRadioButton inside an AXTabGroup, and this "
+        .. "one is. axpolicy.refinedRole promoted it to the synthetic AXTab "
+        .. "so tabs get the pack's tab sounds instead of borrowing the radio "
+        .. "button's -- the refinement fired exactly as designed",
+    },
+  },
+  AXTabGroup = {
+    AXTab = {
+      why = "the centre of an AXTabGroup is a tab. The tabs tile the group, "
+        .. "so a hit test aimed at the middle of it lands on one, and that "
+        .. "tab refines to AXTab -- the refinement fired as designed. The "
+        .. "group answers for itself only where no tab covers it",
+    },
+  },
+}
+
+-- Why a scroll bar and its thumb so often probe as whatever is behind them.
+-- Genuinely unexplained until this was understood, and still a WARN, because
+-- the check cannot measure what it is for until the setting changes.
+local OVERLAY_SCROLLBARS =
+  "macOS overlay scroll bars are published in the accessibility tree even "
+  .. "while they are hidden, but they are not HIT-TESTABLE while hidden, so "
+  .. "the probe falls through to the container behind them. That is an "
+  .. "appearance setting rather than a defect in this Spoon: System Settings "
+  .. "> Appearance > \"Show scroll bars: Always\" makes them persistent and "
+  .. "hittable, and this check then measures what it is for"
+
+local HINTS = {
+  AXScrollBar = OVERLAY_SCROLLBARS,
+  AXValueIndicator = OVERLAY_SCROLLBARS,
+}
+
 -- Move to each found element in turn, let the hover loop take a tick, and
 -- record what the probe answered and what the maps would do with it. No
 -- clicking: press and release semantics are read out of rolemap rather than
@@ -1083,14 +1283,24 @@ function H:hoverEach(index, done)
 
     local text = string.format("%-20s -> %-18s (%s, %s)", item.key,
       tostring(role), rolemap.isLeafRole(role) and "leaf" or "container", via)
+    local explained = ((EXPLAINED[item.key] or {})[role])
+    if explained and explained.when then
+      local ok, agreed = pcall(explained.when, entry)
+      if not (ok and agreed) then explained = nil end
+    end
     if role == nil then
       self:fail(id, text .. " -- the probe answered nothing at its centre")
-    elseif role ~= item.expect then
+    elseif role == item.expect then
+      self:pass(id, text)
+    elseif explained then
+      self:pass(id, text .. string.format(
+        " -- %s as designed: %s", item.key .. " -> " .. tostring(role),
+        explained.why))
+    else
       self:warn(id, text .. string.format(
         " -- the walk matched %s but the probe at its centre answered %s",
-        item.key, tostring(role)))
-    else
-      self:pass(id, text)
+        item.key, tostring(role))
+        .. (HINTS[item.key] and (". " .. HINTS[item.key]) or ""))
     end
     self:note("  frame " .. frameText(entry.frame)
       .. "  raw AXRole " .. tostring(entry.role)
@@ -1445,27 +1655,55 @@ end
 function H:finderFiles(done)
   self:na("E4", "not run automatically: it would create a file under your "
     .. "Desktop. The only file the automatic phases write is the report "
-    .. "itself. Run :diagnose({guided = true}) for step F7, which announces "
-    .. "the exact path before creating it")
+    .. "itself. Run :diagnose({guided = true}) for step F8, which announces "
+    .. "the exact path before creating it and removes it as soon as it has "
+    .. "read what it needs")
   return done()
 end
 
--- Create one uniquely-named file under the Desktop, watch what the Finder
--- source makes of it, and remove that exact path again.
+-- Create one file under the Desktop, watch what the Finder source makes of
+-- it, and remove that exact path again the instant the check has what it
+-- came for.
 --
--- Every part of this is deliberately narrow: one path, built from the clock,
+-- Every part of this is deliberately narrow: ONE path, fixed and announced,
 -- created with io.open and removed with os.remove BY NAME. No glob, no
--- directory removal, no recursion, and nothing touched that the harness did
--- not itself create a second earlier. A removal that fails is reported with
--- the full path rather than retried or worked around.
+-- directory removal, no recursion, and nothing touched that this harness did
+-- not itself write and cannot recognise as its own on the way out.
+--
+-- The file exists for as short a time as the question allows, which is not
+-- zero and not a fixed wait either. There is a FLOOR: removing it before the
+-- creation has been delivered and coalesced would merge the two events into
+-- one burst, and an arrival and a departure under one parent is a RENAME to
+-- the gate -- the step would then be testing something it was not asked
+-- about. So it polls the tape and takes the file off disk in the same
+-- callback that first sees the sound, falling back to the full window only
+-- when there is no sound to wait for. Everything else about the file's
+-- lifetime is covered by the scratch section at the top of this file.
 function H:guidedFinderFile(step, done)
-  local home = os.getenv("HOME") or ""
-  local path = string.format("%s/Desktop/platinumsnd-diagnostic-%d.tmp",
-    home, math.floor(clock()))
+  local path = scratchPath()
   print("PlatinumSnd diagnose: " .. step.id
     .. " will create and then remove exactly this one file:")
   print("    " .. path)
+  print("    (removed the moment the check has read what it needs; if this "
+    .. "run is interrupted, the next one removes it and says so)")
   pcall(hs.alert.show, step.id .. ": creating and removing\n" .. path, 4)
+
+  -- Nothing is created over the top of a file that is already there. Either
+  -- it is a file of the user's that happens to share the name -- not ours to
+  -- overwrite OR to remove -- or it is one of ours that the sweep at entry
+  -- could not shift, and creating a second one would help nobody.
+  if scratchExists(path) then
+    if isOurScratch(path) then
+      self:na(step.id, "not run: an earlier run's scratch file is still at "
+        .. path .. " and this run could not remove it either (A0 says why), "
+        .. "so nothing new was created")
+    else
+      self:na(step.id, "not run: something is already at " .. path
+        .. " and it was not written by this harness, so it has been left "
+        .. "exactly as it is")
+    end
+    return done()
+  end
 
   local front = fcall(hs.application.frontmostApplication)
   local frontBundle = front and call(front, "bundleID")
@@ -1482,16 +1720,20 @@ function H:guidedFinderFile(step, done)
     self:fail(step.id, "could not create " .. path .. ": " .. tostring(err))
     return done()
   end
-  file:write("PlatinumSnd diagnostics scratch file; safe to delete\n")
+  -- Recorded as outstanding BEFORE the write, so that every path out of here
+  -- -- including one that never reaches the next line -- knows about it.
+  scratch.path = path
+  self.scratchCreated = path
+  armShutdownSweep()
+  file:write(C.scratchMarker .. "\n")
   file:close()
 
-  after(C.finderWaitSeconds, function()
-    local created = self:since(mark)
+  local expectSound = frontBundle == "com.apple.finder" or graceOpen
+
+  local function report(created, removed, removeErr)
     local mark2 = self:mark()
-    local removed, removeErr = os.remove(path)
     after(C.finderWaitSeconds, function()
       local departed = self:since(mark2)
-      local expectSound = frontBundle == "com.apple.finder" or graceOpen
       local text = string.format(
         "%s: created then removed (frontmost %s, gate open %s) -- create "
         .. "asked for %s, remove asked for %s", path:match("[^/]+$"),
@@ -1505,14 +1747,26 @@ function H:guidedFinderFile(step, done)
           .. " -- expected silence: the gate requires Finder to have been "
           .. "frontmost within finderGraceSeconds")
       end
-      if not removed then
+      if removed == false and self:scratchStillThere(path, removeErr) then
         self:fail(step.id .. "!", "THE SCRATCH FILE COULD NOT BE REMOVED: "
           .. path .. " (" .. tostring(removeErr) .. ") -- delete it yourself")
-        print("PlatinumSnd diagnose: could not remove " .. path)
       end
       done()
     end)
-  end)
+  end
+
+  local waited = 0
+  local function poll()
+    waited = waited + C.finderPollSeconds
+    local created = self:since(mark)
+    if #created == 0 and waited < C.finderWaitSeconds then
+      return after(C.finderPollSeconds, poll)
+    end
+    -- Same callback, first thing, no later phase and no teardown handler.
+    local removed, removeErr = takeScratch(path)
+    report(created, removed, removeErr)
+  end
+  after(C.finderPollSeconds, poll)
 end
 
 -- ===================================================================== F
@@ -1529,7 +1783,20 @@ local GUIDED = {
      .. "folder on the Desktop.", expect = {"finder.new"}},
   {id = "F5", instruction = "Drag a file into a Finder window and drop it.",
    expect = {"finder.drop"}},
+  -- Left for the human on purpose. The harness could make a scratch .dmg
+  -- under /tmp and mount it, and the file itself would be no worse than F8's
+  -- -- but mounting one puts a volume in /Volumes, in the Finder's sidebar
+  -- and in every open-file dialog on the machine, and an interrupted run
+  -- would leave THAT behind rather than an empty file. F8 has already shown
+  -- that a run gets interrupted, and a mounted volume is a great deal more
+  -- work to undo than a stat and an os.remove. So the step tells you how to
+  -- make a throwaway image, and you stay in charge of it.
   {id = "F6", instruction = "Mount a disk image, then eject it.",
+   hint = "No image to hand? In Terminal: hdiutil create -size 10m -fs "
+     .. "APFS -volname PSndTest /tmp/psnd-test.dmg && open "
+     .. "/tmp/psnd-test.dmg -- eject it in the Finder, then rm "
+     .. "/tmp/psnd-test.dmg. The harness will not mount anything itself: an "
+     .. "interrupted run would leave a volume mounted.",
    expect = {"disk.insert", "disk.eject"}},
   {id = "F7", instruction = "Launch an application that is not already "
      .. "running.", expect = {"app.launch"}},
@@ -1576,6 +1843,9 @@ function H:guidedStep(index, done)
   local text = string.format("%s (%ds): %s", step.id, C.guidedWindowSeconds,
     step.instruction)
   print("PlatinumSnd diagnose: " .. text)
+  -- The hint goes to the console only: it is a paragraph, and an alert is a
+  -- sentence.
+  if step.hint then print("    " .. step.hint) end
   pcall(hs.alert.show, text, C.guidedWindowSeconds)
   local mark = self:mark()
   after(C.guidedWindowSeconds, function()
@@ -1802,10 +2072,48 @@ function H:phaseG(done)
 
   -- And a functional proxy: accessibility still answers after the bound was
   -- supposed to be lifted.
-  local title = call(fcall(hs.window.focusedWindow), "title")
-  self:verdict(title ~= nil, "G10", string.format(
-    "accessibility still answers after stop() (focused window title: %s)",
-    tostring(title)))
+  --
+  -- Asked of the accessibility API itself, because that is the claim. The
+  -- first version of this check read the focused window's TITLE, which is
+  -- neither necessary nor sufficient for it: there may be no focused window
+  -- at this point in the run at all -- the harness has just closed the
+  -- console and quit Calculator -- and plenty of perfectly healthy windows
+  -- have no title. It duly reported a failure with nothing wrong, which is
+  -- worse than no check, because it teaches whoever reads this report that a
+  -- FAIL line can be ignored.
+  --
+  -- systemWideElement is the entry point every other accessibility call in
+  -- this Spoon goes through, and a hit test at the cursor is the smallest
+  -- round trip into another process that returns something with a role. No
+  -- part of it depends on which window has focus.
+  local sysNow = fcall(hs.axuielement.systemWideElement)
+  local point = mouseGet()
+  local where = point and string.format("(%d, %d)", round(point.x),
+    round(point.y)) or "the cursor, whose position could not be read"
+  local probed, roleNow = nil, nil
+  if sysNow and point then
+    local hit, element = pcall(sysNow.elementAtPosition, sysNow, point.x,
+                               point.y)
+    probed = hit and element or nil
+    roleNow = att(probed, "AXRole")
+  end
+  if not sysNow then
+    self:fail("G10", "accessibility does NOT answer after stop(): "
+      .. "hs.axuielement.systemWideElement() returned nothing")
+  elseif type(roleNow) == "string" then
+    self:pass("G10", string.format(
+      "accessibility still answers after stop(): systemWideElement returned "
+      .. "an element and a hit test at %s answered AXRole=%s", where, roleNow))
+  else
+    -- Nothing under the cursor is an empty screen region, not a defect, so
+    -- this warns instead of failing.
+    self:warn("G10", string.format(
+      "accessibility answered in part after stop(): systemWideElement "
+      .. "returned an element, but the hit test at %s came back with %s. An "
+      .. "empty region of screen is not a defect -- put the cursor over a "
+      .. "window and re-run if you want this settled", where,
+      probed and "an element with no readable AXRole" or "nothing"))
+  end
 
   self:filterTeardown(filter)
 
@@ -1896,6 +2204,16 @@ function H:summary()
     self.counts.PASS, self.counts.FAIL, self.counts.WARN,
     self.counts["----"], self.counts.SKIP))
   self:raw("")
+  -- Above everything else, including the failures: a file of this harness's
+  -- that is still on the user's disk is the one thing here they have to act
+  -- on, and the phase body it was first reported in has scrolled past.
+  if #self.scratchLeft > 0 then
+    self:raw("!! A FILE THIS HARNESS CREATED IS STILL ON YOUR DISK AND COULD "
+      .. "NOT BE REMOVED.")
+    self:raw("!! Delete it yourself:")
+    for _, path in ipairs(self.scratchLeft) do self:raw("!!     " .. path) end
+    self:raw("")
+  end
   if #self.problems == 0 then
     self:raw("Nothing failed and nothing warned.")
   else
@@ -1963,6 +2281,25 @@ function H:restore()
   pcall(function()
     if self.deadman then self.deadman:stop(); self.deadman = nil end
   end)
+  -- The scratch file, if F8 was cut short between creating it and removing
+  -- it. This runs before the summary is assembled, so a removal that fails
+  -- here still gets shouted about in the report.
+  pcall(function()
+    local path = scratch.path
+    if not path then return end
+    local removed, err = takeScratch(path)
+    if removed == true then
+      pcall(function()
+        self:warn("F8!", "the run ended before guided step F8 could remove "
+          .. "its scratch file; it was removed here instead: " .. path)
+      end)
+    elseif removed == false and self:scratchStillThere(path, err) then
+      pcall(function()
+        self:fail("F8!", "THE SCRATCH FILE COULD NOT BE REMOVED: " .. path
+          .. " (" .. tostring(err) .. ") -- delete it yourself")
+      end)
+    end
+  end)
   pcall(function() self.obj.diagnosing = nil end)
 end
 
@@ -1987,8 +2324,17 @@ function H:finish()
         self.opts.guided and "guided" or "not run", clock() - self.startedAt),
       "touched: the cursor (put back), this Spoon's state (put back), and "
         .. "this report file.",
-      "no window was opened, closed, moved or focused; no other file was "
-        .. "written.",
+      "no window was opened, closed, moved or focused; "
+        -- Asked of the disk rather than of the bookkeeping: this line is the
+        -- harness's account of what it did to the machine, and a stat is the
+        -- only version of it that cannot be wrong.
+        .. (self.scratchCreated
+            and ("guided step F8 created one scratch file, "
+                 .. self.scratchCreated .. ", and "
+                 .. (isOurScratch(self.scratchCreated)
+                     and "COULD NOT REMOVE IT -- see the summary"
+                     or "removed it again") .. ".")
+            or "no other file was written."),
       string.rep("=", 72),
     }
     local body = table.concat(header, "\n") .. "\n"
@@ -2016,6 +2362,18 @@ end
 
 function H:begin()
   self.startedAt = clock()
+  -- Before anything else, and before a single check runs: a scratch file an
+  -- earlier run was interrupted before it could remove. Removed here, and
+  -- reported by Phase A as a WARN naming the path -- silently tidying it away
+  -- would mean the user never learns it happened.
+  local path = scratchPath()
+  if isOurScratch(path) then
+    local removed, err = takeScratch(path)
+    table.insert(self.swept, {path = path, removed = removed == true,
+                              err = err})
+  elseif scratchExists(path) then
+    table.insert(self.swept, {path = path, removed = false, foreign = true})
+  end
   self.cursorHome = mouseGet()
   self.wasRunning = self.obj.running == true
   self.wasDryRun = (self.obj.engine or {}).isDryRun == true
@@ -2108,8 +2466,12 @@ local function preamble(opts)
   if opts.guided then
     table.insert(lines, "  Guided steps ask YOU to act, and one of them "
       .. "creates and removes a single")
-    table.insert(lines, "  scratch file on your Desktop -- it prints the "
-      .. "exact path before doing so.")
+    table.insert(lines, "  scratch file, " .. home .. C.reportDir .. "/"
+      .. C.scratchName .. " -- it prints the path")
+    table.insert(lines, "  before creating it, removes it as soon as it has "
+      .. "read what it needs, and if this")
+    table.insert(lines, "  run is interrupted in between, the next run "
+      .. "removes it and says so.")
   end
   print(table.concat(lines, "\n"))
 end
