@@ -99,11 +99,16 @@ local C = {
   consoleWaitSeconds    = 1,
   launchWaitSeconds     = 4,
   finderWaitSeconds     = 1.8,
-  -- Tried in order; the first one installed and NOT already running is used,
-  -- and quit again afterwards. Nothing already running is ever touched.
-  launchCandidates      = {
-    "com.apple.calculator", "com.apple.stickies", "com.apple.TextEdit",
-  },
+  -- Used only if it is installed and NOT already running, launched WITHOUT
+  -- activation, and quit again by the exact pid that appeared. Calculator
+  -- alone, deliberately: it owns no documents, so quitting it can neither
+  -- prompt nor lose anything. An editor here could sit on unsaved work.
+  launchBundle          = "com.apple.calculator",
+  -- Hard ceiling on the whole run. If the step chain is ever broken badly
+  -- enough that it stops advancing, this is what still gives the cursor,
+  -- the dry-run flag, the engine's methods and the running state back.
+  deadmanSeconds        = 300,
+  deadmanGuidedExtra    = 200,
 }
 
 -- The roles Phase C hunts for, in report order. `expect` is the role the
@@ -139,12 +144,15 @@ local TRAFFIC_LIGHTS = {
 -- the registration order init.lua fixes, which Phase G verifies separately
 -- rather than assuming.
 local TEARDOWN = {
+  -- `ctx` on both: the shared context table src_windows publishes
+  -- windowDragging into and src_pointer reads. A source still holding one
+  -- after stop() is holding a live channel to a source that has stopped.
   {index = 1, name = "src_pointer",
-   nils = {"tap", "timer", "probe", "cache"},
+   nils = {"tap", "timer", "probe", "cache", "ctx"},
    falses = {"thumbDragging", "sliderDragging"}},
   {index = 2, name = "src_windows",
    nils = {"tap", "dragTimer", "filter", "volumeWatcher", "appWatcher",
-           "paletteIds"},
+           "paletteIds", "ctx"},
    falses = {"dragging"}},
   {index = 3, name = "src_menus", nils = {"appWatcher", "sweeper"}},
   {index = 4, name = "src_finder",
@@ -411,22 +419,35 @@ end
 -- the Spoon's own timers -- the hover loop above all -- room to run between
 -- the things this harness does to them.
 function H:runStep(index)
+  -- Wrapped whole. A failure INSIDE the machinery -- not inside a step, which
+  -- is guarded below, but in the guarding itself -- would otherwise stop the
+  -- chain advancing with the cursor moved and the engine still shimmed. Any
+  -- such failure ends the run properly instead.
+  local ok, err = pcall(function() self:runStepGuarded(index) end)
+  if not ok then
+    pcall(function()
+      self:fail("!!", "the harness itself failed: " .. tostring(err))
+    end)
+    self:finish()
+  end
+end
+
+function H:runStepGuarded(index)
   local step = self.steps[index]
   if not step then return self:finish() end
-  self.stepIndex = index
 
-  local finished = false
+  local advanced = false
   local watchdog
   local function advance()
-    if finished then return end
-    finished = true
+    if advanced then return end
+    advanced = true
     if watchdog then pcall(function() watchdog:stop() end) end
     hs.timer.doAfter(0, function() self:runStep(index + 1) end)
   end
 
   local limit = step.timeout or C.stepTimeoutSeconds
   watchdog = hs.timer.doAfter(limit, function()
-    if finished then return end
+    if advanced then return end
     self:fail(step.name, string.format(
       "step did not finish within %ds and was abandoned", limit))
     advance()
@@ -437,6 +458,12 @@ function H:runStep(index)
     self:fail(step.name, "step errored: " .. tostring(err))
     advance()
   end
+end
+
+local function delayOf(opts)
+  local delay = tonumber((opts or {}).delay) or 0
+  if delay < 0 then return 0 end
+  return delay
 end
 
 -- Wait, then continue. Every pause in the harness goes through this so that
@@ -604,12 +631,58 @@ function H:phaseB1(done)
     return self:phaseB2(done)
   end
 
+  -- The AX messaging timeout is a PROCESS-GLOBAL mutation, which makes both
+  -- halves of this check awkward.
+  --
+  -- Setting it is what the check is for, but the harness must not leave one
+  -- behind. When the Spoon is running the bound is already installed and
+  -- owned by the Spoon, so setting the same value again changes nothing and
+  -- there is nothing to give back. When the Spoon is stopped, this call is
+  -- the only thing that installed it, and restore() hands it back with 0.0.
   local timeout = (self.obj.tuning or {}).axTimeoutSeconds
+  local ownedBySpoon = self.obj.running == true
   local setOk, setResult = pcall(self.sys.setTimeout, self.sys, timeout)
+  if setOk and not ownedBySpoon then self.axTimeoutOurs = true end
   self:verdict(setOk, "B2", string.format(
     ":setTimeout(%s) on the system-wide element %s", tostring(timeout),
     setOk and ("returned " .. tostring(setResult))
       or ("errored: " .. tostring(setResult))))
+
+  -- WHERE the bound is installed, which the whole-branch review flagged: it
+  -- used to be `axprobe.new`, which worked only because the pointer source
+  -- happens to be registered first, while three other sources depended on it
+  -- without knowing. The fix moves it to obj:start(). Both arrangements are
+  -- recognised here, so this line says which one is actually in the code
+  -- being diagnosed rather than which one was expected.
+  local probe = ((self.obj.sources or {})[1] or {}).probe
+  local ax = self.obj.axprobe
+  local holders = {}
+  if type(ax) == "table" and type(ax.installTimeout) == "function"
+    and type(ax.resetTimeout) == "function" then
+    table.insert(holders,
+      "obj:start() via axprobe.installTimeout (the owner it should have)")
+  end
+  -- Discriminated on Probe:release, not on probe.sys: the probe still holds a
+  -- system-wide element for its hit-test under either arrangement, so holding
+  -- one says nothing. Owning the bound is what release() undoes, and its
+  -- existence is what says the probe still owns it.
+  if probe ~= nil and type(probe.release) == "function" then
+    table.insert(holders,
+      "sources[1].probe (axprobe.new + Probe:release -- the arrangement the "
+      .. "review flagged; a pointer source that fails to start unbounds the "
+      .. "other three)")
+  end
+  if #holders == 0 then
+    table.insert(holders, "nowhere this harness could find")
+  end
+  self:verdict(#holders == 1 and (ownedBySpoon or self.axTimeoutOurs == true),
+    "B2+", string.format("the %ss AX messaging bound is installed by: %s -- "
+      .. "in force: %s", tostring(timeout), table.concat(holders, " AND "),
+      tostring(ownedBySpoon or self.axTimeoutOurs == true)))
+  self:note("process-global: it applies to hs.window, hs.uielement and every "
+    .. "other AX consumer in Hammerspoon, not just this Spoon. macOS "
+    .. "publishes no getter, so 'in force' is read from who installed it, "
+    .. "never from the value")
 
   local point = mouseGet()
   if not point then
@@ -1229,91 +1302,173 @@ function H:phaseE(done)
   self:consoleWindows(done)
 end
 
--- A genuine windowCreated/windowDestroyed pair, raised by Hammerspoon's own
--- console so nothing of the user's is opened or closed.
+-- Whether the Hammerspoon console window EXISTS, or nil when that cannot be
+-- determined. Existence, not visibility: a console that exists is one the
+-- user opened, whether it is in front or buried, and this harness does not
+-- close windows it did not open.
+local function consoleExists()
+  if type(hs.console) ~= "table" or type(hs.console.hswindow) ~= "function"
+    or type(hs.openConsole) ~= "function"
+    or type(hs.closeConsole) ~= "function" then
+    return nil
+  end
+  local ok, win = pcall(hs.console.hswindow)
+  if not ok then return nil end
+  return win ~= nil
+end
+
+-- A genuine windowCreated/windowDestroyed pair -- but only ever with the
+-- harness's OWN window.
+--
+-- This is the one place the harness could damage a session, and the damage
+-- would be invisible: :diagnose() is almost always typed INTO the console, so
+-- closing it to get a clean creation event would be shutting a window the
+-- user opened, in order to test that shutting windows makes a noise. So the
+-- test runs only when the console was closed to begin with -- then the window
+-- is ours, opening it and closing it again leaves the session exactly as it
+-- was, and there is nothing to restore. Console already open: skipped.
+-- Console state unreadable: not run at all, because "probably closed" is not
+-- good enough to act on.
 function H:consoleWindows(done)
-  local wasOpen = fcall(hs.console.hswindow) ~= nil
-  self.consoleWasOpen = wasOpen
+  local exists = consoleExists()
+  if exists == nil then
+    self:na("E1", "not tested: the console's state could not be read, and "
+      .. "this test will not open or close a window it is unsure about")
+    self:na("E2", "not tested: as E1")
+    return self:appLaunch(done)
+  end
+  if exists then
+    self:skip("E1", "skipped: the console is already open, and it is yours -- "
+      .. "the harness will not close a window it did not open. Close the "
+      .. "console and re-run (bind :diagnose() to a hotkey) to test "
+      .. "windowCreated")
+    self:skip("E2", "skipped: as E1")
+    return self:appLaunch(done)
+  end
+
   local function step(fn, wait, next_)
     local ok = pcall(fn)
     if not ok then return next_(false) end
     after(wait, function() next_(true) end)
   end
-  -- Opening an already-open console only focuses it, so it has to be shut
-  -- first for the creation to be a real one.
-  step(function() if wasOpen then hs.closeConsole() end end,
-    wasOpen and C.consoleWaitSeconds or 0, function()
-      local mark = self:mark()
-      step(hs.openConsole, C.consoleWaitSeconds, function(opened)
-        local created = self:since(mark)
-        local mark2 = self:mark()
-        step(hs.closeConsole, C.consoleWaitSeconds, function(closed)
-          local destroyed = self:since(mark2)
-          if not opened then
-            self:fail("E1", "hs.openConsole() errored")
-          else
-            self:verdict(
-              tapeHas(created, "window.open")
-                or tapeHas(created, "palette.open"),
-              "E1", "console windowCreated asked for: " .. tapeText(created))
-          end
-          if not closed then
-            self:fail("E2", "hs.closeConsole() errored")
-          else
-            self:verdict(
-              tapeHas(destroyed, "window.close")
-                or tapeHas(destroyed, "palette.close"),
-              "E2", "console windowDestroyed asked for: "
-                .. tapeText(destroyed))
-          end
-          self:appLaunch(done)
-        end)
-      end)
+  local mark = self:mark()
+  step(hs.openConsole, C.consoleWaitSeconds, function(opened)
+    local created = self:since(mark)
+    local mark2 = self:mark()
+    -- Closing our own window again, which is what leaves the console exactly
+    -- as this run found it.
+    step(hs.closeConsole, C.consoleWaitSeconds, function(closed)
+      local destroyed = self:since(mark2)
+      if not opened then
+        self:fail("E1", "hs.openConsole() errored")
+      else
+        self:verdict(
+          tapeHas(created, "window.open") or tapeHas(created, "palette.open"),
+          "E1", "the harness's own console window, created: "
+            .. tapeText(created))
+      end
+      if not closed then
+        self:fail("E2", "hs.closeConsole() errored -- the console was opened "
+          .. "by this harness and is still open; close it yourself")
+      else
+        self:verdict(
+          tapeHas(destroyed, "window.close")
+            or tapeHas(destroyed, "palette.close"),
+          "E2", "the harness's own console window, destroyed: "
+            .. tapeText(destroyed))
+      end
+      -- Available to Phase G as the one window event the harness may raise
+      -- without touching anything of the user's.
+      self.consoleIsOurs = (opened == true) and (closed == true)
+      self:appLaunch(done)
     end)
+  end)
 end
 
 -- `flap` needs an application that is not already running, and the only
--- honest trigger is to launch one. Nothing already running is touched, and
--- anything this launches is quit again.
+-- honest trigger is to launch one.
+--
+-- Launched WITHOUT activation -- `open -g` rather than
+-- launchOrFocusByBundleID -- so the frontmost application never changes and
+-- nothing of the user's is pushed behind anything. Only an app that was not
+-- already running is a candidate, so no running app is ever quit, and the
+-- quit afterwards names the exact pid that appeared.
 function H:appLaunch(done)
-  local chosen
-  for _, bundle in ipairs(C.launchCandidates) do
-    local installed = fcall(hs.application.pathForBundleID, bundle)
-    local running = fcall(hs.application.get, bundle)
-    if installed and not running and not chosen then chosen = bundle end
-  end
-  if not chosen then
-    self:na("E3", "not tested: every candidate app is already running or "
-      .. "not installed -- see the guided phase")
+  local bundle = C.launchBundle
+  local installed = fcall(hs.application.pathForBundleID, bundle)
+  local already = fcall(hs.application.get, bundle)
+  if not installed or already or type(hs.execute) ~= "function" then
+    self:na("E3", string.format(
+      "not tested: %s is %s -- an app that is already running cannot be "
+      .. "launched, and this harness will not quit one it did not start; "
+      .. "guided step F7 covers it", bundle,
+      already and "already running" or "not installed"))
     return self:finderFiles(done)
   end
+
   local mark = self:mark()
-  local ok = pcall(hs.application.launchOrFocusByBundleID, chosen)
+  -- -g: open in the background. The user's frontmost app stays frontmost.
+  local ok = pcall(hs.execute, "open -g -b " .. bundle)
   if not ok then
-    self:fail("E3", "could not launch " .. chosen)
+    self:fail("E3", "could not launch " .. bundle .. " in the background")
     return self:finderFiles(done)
   end
   after(C.launchWaitSeconds, function()
     local tape = self:since(mark)
     self:verdict(tapeHas(tape, "app.launch"), "E3", string.format(
-      "launching %s asked for: %s", chosen, tapeText(tape)))
-    local app = fcall(hs.application.get, chosen)
-    if app then pcall(function() app:kill() end) end
+      "launching %s in the background asked for: %s", bundle, tapeText(tape)))
+    local app = fcall(hs.application.get, bundle)
+    local pid = app and call(app, "pid")
+    if app and pid then
+      local quit = pcall(function() app:kill() end)
+      if not quit then
+        self:warn("E3+", string.format(
+          "%s (pid %s) was launched by this harness and could not be quit -- "
+          .. "quit it yourself", bundle, tostring(pid)))
+      end
+    elseif app then
+      self:warn("E3+", bundle .. " was launched by this harness but its pid "
+        .. "could not be read, so it was left running rather than risk "
+        .. "quitting something else")
+    end
     self:finderFiles(done)
   end)
 end
 
--- A file appearing and disappearing under a watched directory. With anything
--- but Finder frontmost the gate is meant to swallow it, which is check 4.2 --
--- the positive case needs Finder in front and lives in the guided phase.
+-- The Finder path-watcher check needs a file to appear under a watched
+-- directory, and the only watched directories are the user's own Desktop,
+-- Documents and Downloads. Writing there is touching their data, however
+-- uniquely the file is named and however promptly it is removed, so the
+-- automatic run does not do it: nothing outside the report file is written
+-- without being asked for and told where. Guided step F7 does it, announcing
+-- the exact path first.
 function H:finderFiles(done)
+  self:na("E4", "not run automatically: it would create a file under your "
+    .. "Desktop. The only file the automatic phases write is the report "
+    .. "itself. Run :diagnose({guided = true}) for step F7, which announces "
+    .. "the exact path before creating it")
+  return done()
+end
+
+-- Create one uniquely-named file under the Desktop, watch what the Finder
+-- source makes of it, and remove that exact path again.
+--
+-- Every part of this is deliberately narrow: one path, built from the clock,
+-- created with io.open and removed with os.remove BY NAME. No glob, no
+-- directory removal, no recursion, and nothing touched that the harness did
+-- not itself create a second earlier. A removal that fails is reported with
+-- the full path rather than retried or worked around.
+function H:guidedFinderFile(step, done)
   local home = os.getenv("HOME") or ""
   local path = string.format("%s/Desktop/platinumsnd-diagnostic-%d.tmp",
     home, math.floor(clock()))
+  print("PlatinumSnd diagnose: " .. step.id
+    .. " will create and then remove exactly this one file:")
+  print("    " .. path)
+  pcall(hs.alert.show, step.id .. ": creating and removing\n" .. path, 4)
+
   local front = fcall(hs.application.frontmostApplication)
   local frontBundle = front and call(front, "bundleID")
-  local finderFront = frontBundle == "com.apple.finder"
-
   local gate = ((self.obj.sources or {})[4] or {}).gate
   local graceOpen = false
   if gate then
@@ -1324,31 +1479,36 @@ function H:finderFiles(done)
   local mark = self:mark()
   local file, err = io.open(path, "w")
   if not file then
-    self:fail("E4", "could not create " .. path .. ": " .. tostring(err))
+    self:fail(step.id, "could not create " .. path .. ": " .. tostring(err))
     return done()
   end
-  file:write("PlatinumSnd diagnostics\n")
+  file:write("PlatinumSnd diagnostics scratch file; safe to delete\n")
   file:close()
 
   after(C.finderWaitSeconds, function()
     local created = self:since(mark)
     local mark2 = self:mark()
-    os.remove(path)
+    local removed, removeErr = os.remove(path)
     after(C.finderWaitSeconds, function()
-      local removed = self:since(mark2)
-      local expectSound = finderFront or graceOpen
+      local departed = self:since(mark2)
+      local expectSound = frontBundle == "com.apple.finder" or graceOpen
       local text = string.format(
-        "creating then removing %s with frontmost=%s (gate open: %s): "
-        .. "create asked for %s, remove asked for %s",
-        path:match("[^/]+$"), tostring(frontBundle), tostring(graceOpen),
-        tapeText(created), tapeText(removed))
+        "%s: created then removed (frontmost %s, gate open %s) -- create "
+        .. "asked for %s, remove asked for %s", path:match("[^/]+$"),
+        tostring(frontBundle), tostring(graceOpen), tapeText(created),
+        tapeText(departed))
       if expectSound then
         self:verdict(tapeHas(created, "finder.new")
-          or tapeHas(created, "finder.copydone"), "E4", text)
+          or tapeHas(created, "finder.copydone"), step.id, text)
       else
-        self:verdict(#created == 0 and #removed == 0, "E4", text
-          .. " -- expected silence, since the gate requires Finder to have "
-          .. "been frontmost within finderGraceSeconds")
+        self:verdict(#created == 0 and #departed == 0, step.id, text
+          .. " -- expected silence: the gate requires Finder to have been "
+          .. "frontmost within finderGraceSeconds")
+      end
+      if not removed then
+        self:fail(step.id .. "!", "THE SCRATCH FILE COULD NOT BE REMOVED: "
+          .. path .. " (" .. tostring(removeErr) .. ") -- delete it yourself")
+        print("PlatinumSnd diagnose: could not remove " .. path)
       end
       done()
     end)
@@ -1371,6 +1531,14 @@ local GUIDED = {
    expect = {"finder.drop"}},
   {id = "F6", instruction = "Mount a disk image, then eject it.",
    expect = {"disk.insert", "disk.eject"}},
+  {id = "F7", instruction = "Launch an application that is not already "
+     .. "running.", expect = {"app.launch"}},
+  -- Machine-driven rather than instructed, and the one step in this file that
+  -- writes anything: `runner` marks it so, and it announces the exact path it
+  -- will create and remove before it does either.
+  {id = "F8", instruction = "The harness creates and removes one scratch file "
+     .. "on your Desktop (path announced below).",
+   runner = "guidedFinderFile"},
 }
 
 function H:phaseF(done)
@@ -1394,6 +1562,17 @@ end
 function H:guidedStep(index, done)
   local step = GUIDED[index]
   if not step then return done() end
+  local function continue_() self:guidedStep(index + 1, done) end
+  -- A step the harness performs itself rather than asks for. It reports its
+  -- own verdict, so there is no capture window to open around it.
+  if step.runner then
+    local ok = pcall(function() self[step.runner](self, step, continue_) end)
+    if not ok then
+      self:fail(step.id, "the step errored and was abandoned")
+      continue_()
+    end
+    return
+  end
   local text = string.format("%s (%ds): %s", step.id, C.guidedWindowSeconds,
     step.instruction)
   print("PlatinumSnd diagnose: " .. text)
@@ -1418,8 +1597,113 @@ function H:guidedStep(index, done)
           tapeText(tape), table.concat(missing, ", ")))
       end
     end
-    self:guidedStep(index + 1, done)
+    continue_()
   end)
+end
+
+-- Count the calls that install and hand back the process-wide AX bound.
+--
+-- There is no getter for the value, so the call is the only observable. Same
+-- shape as the engine shim: record, delegate, and put the module function
+-- back through restore() whatever happens in between. Absent on a Spoon that
+-- still installs the bound from axprobe.new, where there is nothing to count.
+function H:installAxShim()
+  local ax = self.obj.axprobe
+  if type(ax) ~= "table" then return end
+  if type(ax.installTimeout) ~= "function"
+    or type(ax.resetTimeout) ~= "function" then
+    return
+  end
+  self.axCalls = {install = 0, reset = 0}
+  self.axShimmed = ax
+  self.axShadow = {
+    installTimeout = ax.installTimeout, resetTimeout = ax.resetTimeout,
+  }
+  local calls, shadow = self.axCalls, self.axShadow
+  ax.installTimeout = function(...)
+    calls.install = calls.install + 1
+    return shadow.installTimeout(...)
+  end
+  ax.resetTimeout = function(...)
+    calls.reset = calls.reset + 1
+    return shadow.resetTimeout(...)
+  end
+end
+
+function H:removeAxShim()
+  if not self.axShimmed then return end
+  self.axShimmed.installTimeout = self.axShadow.installTimeout
+  self.axShimmed.resetTimeout = self.axShadow.resetTimeout
+  self.axShimmed = nil
+end
+
+-- Whether the window filter really went away, which the whole-branch review
+-- doubted: src_windows calls :unsubscribeAll(), and Hammerspoon documents
+-- :delete() as the full teardown. The difference matters because the toggle
+-- hotkey builds a new filter on every start, so a filter that survives its
+-- stop is one more live subscriber on the next one -- and the symptom is
+-- window sounds doubling, then trebling, not an error.
+--
+-- Three things are readable from Lua and one is not: whether the source let
+-- go of its reference, whether :delete exists to be called, and whether the
+-- instance still holds subscriptions. Hammerspoon publishes no registry of
+-- filter instances, so the COUNT of live filters cannot be read at all --
+-- G13 measures the consequence instead of the cause.
+-- Record which teardown method the source calls on its filter. Wrapped before
+-- stop() and read after it, because "delete exists" and "delete was called"
+-- are different claims and only the second one is worth reporting.
+function H:installFilterShim(filter)
+  if not filter then return end
+  self.filterCalls = {delete = 0, unsubscribeAll = 0}
+  local calls = self.filterCalls
+  local shadow = {delete = filter.delete,
+                  unsubscribeAll = filter.unsubscribeAll}
+  for _, name in ipairs({"delete", "unsubscribeAll"}) do
+    if type(shadow[name]) == "function" then
+      filter[name] = function(...)
+        calls[name] = calls[name] + 1
+        return shadow[name](...)
+      end
+    end
+  end
+  self.filterHasDelete = type(shadow.delete) == "function"
+end
+
+function H:filterTeardown(filter)
+  if not filter then
+    self:na("G11", "no window filter to inspect: src_windows never built one")
+    return
+  end
+  local calls = self.filterCalls or {delete = 0, unsubscribeAll = 0}
+  local subscriptions, counted = 0, false
+  for _, field in ipairs({"subscriptions", "events", "notifyfns"}) do
+    local value = rawget(filter, field)
+    if type(value) == "table" then
+      counted = true
+      for _ in pairs(value) do subscriptions = subscriptions + 1 end
+    end
+  end
+  local how
+  if calls.delete > 0 then
+    how = ":delete() was called, which is the documented full teardown"
+  elseif calls.unsubscribeAll > 0 then
+    how = ":unsubscribeAll() was called and :delete() was not -- that "
+      .. "silences this instance's callbacks but leaves it registered, so "
+      .. "each toggle leaves another live filter behind"
+  else
+    how = "neither :delete() nor :unsubscribeAll() was called on it"
+  end
+  local text = string.format("window filter after stop(): %s; %s; reference "
+    .. "%s", how,
+    counted and string.format("%d subscription entries left on the instance",
+      subscriptions)
+      or "no readable subscription table on the instance",
+    (self.obj.sources[2] or {}).filter == nil and "dropped"
+      or "STILL HELD by the source")
+  self:verdict(calls.delete > 0
+    or (not self.filterHasDelete and calls.unsubscribeAll > 0), "G11", text)
+  self:note("Hammerspoon exposes no registry of filter instances, so live "
+    .. "filters cannot be counted from Lua; G14 tests the consequence")
 end
 
 -- ===================================================================== G
@@ -1439,12 +1723,14 @@ function H:phaseG(done)
     "%d sources registered in the documented order (pointer, windows, "
     .. "menus, finder, keys)", #sources))
 
-  -- Hold on to the probe: stop() drops the reference, and whether it handed
-  -- the process-wide AX messaging timeout back is only readable from the
-  -- object itself.
+  -- Hold on to the probe and the window filter: stop() drops both references,
+  -- and what each did on the way out is only readable from the object itself.
   local probe = (sources[1] or {}).probe
+  local filter = (sources[2] or {}).filter
   local observersBefore = call(sources[3], "observerCount")
 
+  self:installAxShim()
+  self:installFilterShim(filter)
   local stopped = pcall(function() self.obj:stop() end)
   self:verdict(stopped and self.obj.running == false, "G2", string.format(
     "obj:stop() completed and running is %s", tostring(self.obj.running)))
@@ -1495,14 +1781,24 @@ function H:phaseG(done)
     "no sustained sound left playing after stop()%s",
     #playing == 0 and "" or ": " .. table.concat(playing, ", ")))
 
-  -- macOS publishes no getter for the AX messaging timeout, so the strongest
-  -- evidence available is that Probe:release() ran -- it is the only thing
-  -- that hands the process-wide 50 ms bound back.
-  local released = probe and probe.released == true
-  self:verdict(released == true, "G9", string.format(
-    "the probe handed the process-wide AX timeout back (released=%s); there "
-    .. "is no getter for it, so this is the strongest available evidence",
-    tostring(probe and probe.released)))
+  -- macOS publishes no getter for the AX messaging timeout, so the only way
+  -- to know it was handed back is to watch the call that hands it back. The
+  -- shim installed above counts it; the older arrangement, where the probe
+  -- released it from its own stop(), is read from the probe instead.
+  if self.axCalls then
+    self:verdict(self.axCalls.reset == 1, "G9", string.format(
+      "obj:stop() called axprobe.resetTimeout %d time(s) (expected exactly "
+      .. "1) -- there is no getter for the bound, so watching the call is "
+      .. "the strongest evidence available", self.axCalls.reset))
+  elseif probe ~= nil and rawget(probe, "released") ~= nil then
+    self:verdict(probe.released == true, "G9", string.format(
+      "the probe handed the process-wide AX timeout back (released=%s)",
+      tostring(probe.released)))
+  else
+    self:na("G9", "no mechanism found that hands the AX messaging bound "
+      .. "back: neither axprobe.resetTimeout nor Probe:release exists, so "
+      .. "this Spoon's 50 ms bound may outlive it")
+  end
 
   -- And a functional proxy: accessibility still answers after the bound was
   -- supposed to be lifted.
@@ -1511,16 +1807,84 @@ function H:phaseG(done)
     "accessibility still answers after stop() (focused window title: %s)",
     tostring(title)))
 
+  self:filterTeardown(filter)
+
   after(C.settleSeconds, function()
     if self.wasRunning then
       local ok = pcall(function() self.obj:start() end)
-      self:verdict(ok and self.obj.running == true, "G11", string.format(
+      self:verdict(ok and self.obj.running == true, "G12", string.format(
         "restarted the Spoon as it was found (running=%s)",
         tostring(self.obj.running)))
-    else
-      self:na("G11", "left stopped, which is how the Spoon was found")
+      self:axReinstalled()
+      return after(C.settleSeconds, function() self:doubledEvents(done) end)
     end
+    self:na("G12", "left stopped, which is how the Spoon was found")
+    self:axReinstalled()
+    self:na("G14", "not tested: the Spoon is stopped, so nothing is "
+      .. "subscribed to duplicate")
     done()
+  end)
+end
+
+-- The other half of G9: a start must put back what its stop gave away, or the
+-- Spoon comes back up with every AX call in the process unbounded -- which is
+-- the tap-death condition the bound exists to prevent, and it is silent.
+function H:axReinstalled()
+  if not self.axCalls then
+    self:na("G12+", "not tested: this Spoon does not install the AX bound "
+      .. "through axprobe.installTimeout")
+  elseif not self.wasRunning then
+    self:verdict(self.axCalls.install == 0, "G12+", string.format(
+      "nothing reinstalled the AX bound on a Spoon left stopped (%d calls)",
+      self.axCalls.install))
+  else
+    self:verdict(self.axCalls.install == 1, "G12+", string.format(
+      "obj:start() called axprobe.installTimeout %d time(s) on the restart "
+      .. "(expected exactly 1)", self.axCalls.install))
+  end
+  self:removeAxShim()
+end
+
+-- Whether a stop and a start leave TWO subscribers where there was one.
+--
+-- This is the consequence of the filter teardown question, and the only way
+-- to see it is to raise one window event and count the sounds it asks for.
+-- One window event is available without touching anything of the user's: the
+-- console, and only when this run found it closed and therefore owns it. With
+-- the console already open -- the usual case, since :diagnose() is typed into
+-- it -- there is no window the harness may raise an event with, and the check
+-- reports that rather than borrowing one of the user's.
+function H:doubledEvents(done)
+  if not self.consoleIsOurs then
+    self:na("G14", "not tested: raising a window event needs a window, and "
+      .. "the only one the harness owns is a console it opened itself -- "
+      .. "which this run did not (E1 says why). Close the console and re-run "
+      .. "from a hotkey to test whether stop/start doubles subscribers")
+    return done()
+  end
+  local mark = self:mark()
+  local opened = pcall(hs.openConsole)
+  after(C.consoleWaitSeconds, function()
+    local tape = self:since(mark)
+    pcall(hs.closeConsole)
+    after(C.consoleWaitSeconds, function()
+      local opens = 0
+      for _, entry in ipairs(tape) do
+        if entry.semantic == "window.open"
+          or entry.semantic == "palette.open" then
+          opens = opens + 1
+        end
+      end
+      if not opened then
+        self:na("G14", "not tested: the console would not reopen")
+      else
+        self:verdict(opens == 1, "G14", string.format(
+          "one window opening after a stop/start asked for %d open sound(s) "
+          .. "(expected exactly 1; more means a window filter survived its "
+          .. "stop and the new one joined it)", opens))
+      end
+      done()
+    end)
   end)
 end
 
@@ -1562,27 +1926,50 @@ function H:write(text)
   return nil
 end
 
-function H:finish()
-  -- Restoration first, and each part on its own, so one failure cannot leave
-  -- the rest of the user's Spoon disturbed.
+-- Put back everything the harness touched. Idempotent, and each part guarded
+-- on its own so that one failure cannot cost the others.
+--
+-- This is the finally block. It is reached from three directions: the normal
+-- end of the run, a step that died so badly the chain stopped advancing, and
+-- the dead man's timer -- because a harness that leaves the cursor parked on
+-- a menu bar and every sound suppressed is worse than one that never ran.
+--
+-- Note what is NOT here: nothing to reopen, reposition or refocus a window.
+-- The harness never closes or moves one, so there is nothing of the user's to
+-- undo. The console is the only window it ever opens, only when it was
+-- closed to begin with, and it closes that one itself.
+function H:restore()
+  if self.restored then return end
+  self.restored = true
   pcall(function() self:removeShim() end)
+  pcall(function() self:removeAxShim() end)
   pcall(function()
     if self.cursorHome then mouseSet(self.cursorHome.x, self.cursorHome.y) end
   end)
   pcall(function()
     if self.obj.engine then self.obj:dryRun(self.wasDryRun) end
   end)
+  -- Only ever set while the Spoon was stopped, in which case nothing else in
+  -- the process is relying on the bound and 0.0 is the documented default.
   pcall(function()
-    if self.consoleWasOpen then hs.openConsole() end
+    if self.axTimeoutOurs and self.sys then self.sys:setTimeout(0.0) end
   end)
-
   pcall(function()
     for _, timer in ipairs(self.timers or {}) do
       pcall(function() timer:stop() end)
     end
     self.timers = nil
-    self.obj.diagnosing = nil
   end)
+  pcall(function()
+    if self.deadman then self.deadman:stop(); self.deadman = nil end
+  end)
+  pcall(function() self.obj.diagnosing = nil end)
+end
+
+function H:finish()
+  if self.finished then return self.obj end
+  self.finished = true
+  self:restore()
 
   pcall(function() self:summary() end)
 
@@ -1598,6 +1985,10 @@ function H:finish()
         tostring(self.env.luaVersion), tostring(self.obj.version)),
       string.format("phases A-E and G automatic, F %s | took %.1f s",
         self.opts.guided and "guided" or "not run", clock() - self.startedAt),
+      "touched: the cursor (put back), this Spoon's state (put back), and "
+        .. "this report file.",
+      "no window was opened, closed, moved or focused; no other file was "
+        .. "written.",
       string.rep("=", 72),
     }
     local body = table.concat(header, "\n") .. "\n"
@@ -1657,7 +2048,24 @@ function H:begin()
     C.guidedTimeoutSeconds + #GUIDED * C.guidedWindowSeconds)
   self:add("G", function(h, done) h:phaseG(done) end)
 
-  local delay = tonumber(self.opts.delay) or 0
+  -- The dead man's timer. Nothing is expected to need it -- every step has a
+  -- watchdog and runStep is wrapped -- which is exactly why it is here: the
+  -- failure it covers is the one nobody predicted, and the cost of that one
+  -- is a cursor left parked somewhere and every sound suppressed until the
+  -- next reload.
+  local budget = C.deadmanSeconds + delayOf(self.opts)
+    + (self.opts.guided and C.deadmanGuidedExtra or 0)
+  self.deadman = hs.timer.doAfter(budget, function()
+    if self.finished then return end
+    pcall(function()
+      self:fail("!!", string.format(
+        "the harness passed its %ds deadline; everything it touched has been "
+        .. "put back and the report is whatever had been reached", budget))
+    end)
+    self:finish()
+  end)
+
+  local delay = delayOf(self.opts)
   if delay > 0 then
     print(string.format("PlatinumSnd diagnose: starting in %.0f s -- bring "
       .. "the app you want walked to the front now", delay))
@@ -1669,6 +2077,43 @@ function H:begin()
   return self.obj
 end
 
+-- What it will touch, what it will not, before it touches anything. Anyone
+-- should be able to read this and know the run is safe without reading the
+-- 1,800 lines above it.
+local function preamble(opts)
+  local home = os.getenv("HOME") or "~"
+  local lines = {
+    "PlatinumSnd diagnose: starting. About a minute"
+      .. (opts.guided and " plus the guided steps." or "."),
+    "  TOUCHES: the mouse CURSOR (Phase C moves it over controls it finds, "
+      .. "and puts it back);",
+    "           this Spoon's own state (dry run on, briefly stopped and "
+      .. "restarted at the end);",
+    "           one file, " .. home .. C.reportDir .. "/" .. C.reportBaseName
+      .. ", which is the report.",
+    "  LEAVES ALONE: your windows -- none are opened, closed, moved, resized "
+      .. "or focused;",
+    "                your files -- nothing is created, changed or deleted "
+      .. "anywhere else;",
+    "                your frontmost app -- it stays frontmost throughout.",
+    "  If Calculator is not running it is launched IN THE BACKGROUND and "
+      .. "quit again, to test",
+    "  the app-launch sound. Nothing already running is ever quit.",
+    "  It never clicks, types, or acts on an accessibility element. It only "
+      .. "reads and hovers,",
+    "  so apps may show a tooltip or a highlight as the cursor passes. That "
+      .. "is all they will do.",
+    "  Keep your hands off the mouse until it says it has finished.",
+  }
+  if opts.guided then
+    table.insert(lines, "  Guided steps ask YOU to act, and one of them "
+      .. "creates and removes a single")
+    table.insert(lines, "  scratch file on your Desktop -- it prints the "
+      .. "exact path before doing so.")
+  end
+  print(table.concat(lines, "\n"))
+end
+
 return function(obj, opts)
   opts = opts or {}
   -- One at a time. Two harnesses would shim each other's shims, move the
@@ -1678,10 +2123,7 @@ return function(obj, opts)
     print("PlatinumSnd diagnose: already running; wait for it to finish")
     return obj
   end
-  print("PlatinumSnd diagnose: running; this takes about a minute "
-    .. (opts.guided and "plus the guided steps " or "")
-    .. "and moves the cursor. Keep your hands off the mouse until it says "
-    .. "it has finished.")
+  pcall(preamble, opts)
   pcall(hs.alert.show, "PlatinumSnd diagnostics running -- hands off the "
     .. "mouse", 6)
   local harness = H.new(obj, opts)
@@ -1691,8 +2133,7 @@ return function(obj, opts)
   obj.diagnosing = harness
   local ok, err = pcall(function() harness:begin() end)
   if not ok then
-    pcall(function() harness:removeShim() end)
-    obj.diagnosing = nil
+    pcall(function() harness:restore() end)
     print("PlatinumSnd diagnose: could not start: " .. tostring(err))
   end
   return obj
