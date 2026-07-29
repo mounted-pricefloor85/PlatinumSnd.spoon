@@ -54,6 +54,11 @@ obj.sources = {}
 obj.running = false
 
 function obj:init()
+  -- Loaded here rather than at each start(), for the two module functions that
+  -- own the process-wide AX messaging bound. src_pointer loads its own copy
+  -- for the Probe constructor; both are stateless with respect to the bound,
+  -- which lives on the system-wide element rather than in either table.
+  self.axprobe = dofile(hs.spoons.resourcePath("axprobe.lua"))
   local Sound = dofile(hs.spoons.resourcePath("sound.lua"))
   self.engine = Sound.new({
     root = hs.spoons.resourcePath("snd"),
@@ -82,6 +87,15 @@ function obj:start()
     return self
   end
   self.engine:load()
+  -- BEFORE any source starts. The 50 ms AX messaging bound is process-global
+  -- and three sources rely on it -- src_pointer for its hit-test and attribute
+  -- reads, src_windows for focusedWindow/frame/subrole, src_keys for subrole.
+  -- It used to be installed by the pointer probe's constructor, which worked
+  -- only because that source is registered first, and since each start below
+  -- is individually pcall'ed a pointer that failed to start left the other two
+  -- making unbounded AX calls on the main runloop. Owned here instead, where
+  -- it cannot depend on any one source surviving.
+  self.axprobe.installTimeout(self.tuning, self.log)
   local ctx = {engine = self.engine, tuning = self.tuning, log = self.log}
   for _, source in ipairs(self.sources) do
     local ok, err = pcall(function() source:start(ctx) end)
@@ -97,6 +111,13 @@ function obj:stop()
     local ok, err = pcall(function() source:stop() end)
     if not ok then self.log.e("source failed to stop: " .. tostring(err)) end
   end
+  -- AFTER every source has stopped, so nothing is still making AX calls when
+  -- the bound goes. It is a process-global mutation, so leaving it set would
+  -- keep this Spoon's 50 ms limit on hs.window, hs.uielement and every other
+  -- AX consumer long after the toggle hotkey was supposed to make us inert.
+  -- Unconditional: a source that threw on the way down does not get to keep
+  -- the bound alive. See 5.10 in docs/mac-verification.md.
+  self.axprobe.resetTimeout(self.log)
   self.running = false
   return self
 end

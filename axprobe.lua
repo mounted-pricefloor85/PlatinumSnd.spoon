@@ -52,22 +52,73 @@ local function refined(element, role)
   return role
 end
 
-function axprobe.new(tuning, log)
+-- THE PROCESS-WIDE AX MESSAGING BOUND.
+--
+-- A timeout set on the system-wide element becomes the default for every AX
+-- message this process sends, which is why it is set once here rather than on
+-- each element a hit-test returns -- that hit-test is itself a blocking round
+-- trip into the app under the cursor, running on the same runloop that
+-- services the event taps, and setting a timeout on its result would already
+-- be too late. A multi-second block there is enough for macOS to disable the
+-- tap, which nothing in this Spoon would notice.
+--
+-- NOT OWNED BY THE PROBE, though the functions live in the module that knows
+-- what an AX timeout is. The bound is process-wide, so three sources depend on
+-- it without ever touching this file: src_windows reads `focusedWindow`,
+-- `frame` and `subrole`, and src_keys reads `subrole`. When the install lived
+-- in `new`, it worked only because src_pointer happens to be registered first
+-- -- and since each source start is individually pcall'ed, a src_pointer that
+-- failed to start left the others making UNBOUNDED AX calls on the main
+-- runloop. That is precisely the tap death this guardrail exists to prevent.
+-- init.lua installs it before any source starts and resets it after all of
+-- them stop, so there is exactly one owner and it is not a source.
+--
+-- A failure to install is logged rather than swallowed. There is no getter for
+-- the value, so an unlogged failure is invisible: every AX call in the process
+-- silently loses its bound, and the first symptom is a dead event tap with
+-- nothing in the Console to explain it.
+function axprobe.installTimeout(tuning, log)
+  local ok, err = pcall(function()
+    hs.axuielement.systemWideElement():setTimeout(tuning.axTimeoutSeconds)
+  end)
+  if not ok then
+    log.e("AX messaging timeout NOT installed, every AX call in this process "
+          .. "is unbounded and a slow app can now kill the event taps: "
+          .. tostring(err))
+  end
+  return ok
+end
+
+-- Hand the bound back. Hammerspoon documents 0.0 on the system-wide element as
+-- "reset the global default", so this undoes exactly what installTimeout did
+-- rather than guessing at a prior value. Without it the 50 ms bound outlives
+-- the Spoon and keeps applying to hs.window, hs.uielement and every other AX
+-- consumer in the process -- so a failure here is a mutation left behind on a
+-- Spoon the user has just switched off, and it gets said out loud.
+function axprobe.resetTimeout(log)
+  local ok, err = pcall(function()
+    hs.axuielement.systemWideElement():setTimeout(0.0)
+  end)
+  if not ok then
+    log.e("AX messaging timeout NOT handed back, this Spoon's bound outlives "
+          .. "it and still applies to every other AX consumer: "
+          .. tostring(err))
+  end
+  return ok
+end
+
+-- No `log`: every failure a probe has is counted in `counts` and acted on by
+-- the breaker, which is its reporting channel. The one thing in this module
+-- worth logging is the timeout install above, and that is not a probe's to do.
+function axprobe.new(tuning)
   local self = setmetatable({
     tuning = tuning,
-    log = log,
     breaker = axpolicy.newBreaker(tuning),
     counts = {probes = 0, failures = 0},
   }, Probe)
-  -- Bound the messaging timeout ONCE, on the system-wide element. A timeout
-  -- set there applies to every AX message this process sends, so it covers
-  -- the hit-test as well as the attribute read. Setting it on the element the
-  -- hit-test returns would be too late: that hit-test is itself a blocking
-  -- round-trip into the app under the cursor, and it runs on the same runloop
-  -- that services the event tap. A multi-second block there is enough for
-  -- macOS to disable the tap, which nothing here would notice.
+  -- Held for elementAtPosition. The messaging bound that used to be installed
+  -- here now belongs to init.lua; see installTimeout above for why.
   self.sys = hs.axuielement.systemWideElement()
-  pcall(function() self.sys:setTimeout(tuning.axTimeoutSeconds) end)
   return self
 end
 
@@ -154,17 +205,6 @@ function Probe:pidAt(x, y)
   local gotPid, pid = pcall(function() return element:pid() end)
   if not gotPid then return nil end
   return pid
-end
-
--- Hand the process-wide AX timeout back. Hammerspoon documents 0.0 on the
--- system-wide element as "reset the global default", so this undoes exactly
--- what new() did rather than guessing at a prior value. Without it the 50 ms
--- bound outlives the Spoon and keeps applying to hs.window, hs.uielement and
--- every other AX consumer in the process.
-function Probe:release()
-  if self.released then return end
-  self.released = true
-  pcall(function() self.sys:setTimeout(0.0) end)
 end
 
 function Probe:stats()
