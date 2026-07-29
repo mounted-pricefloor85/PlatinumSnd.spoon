@@ -38,6 +38,7 @@ function obj:init()
     poolSize = self.tuning.poolSize,
     log = self.log,
   })
+  self:register(dofile(hs.spoons.resourcePath("src_pointer.lua")))
   return self
 end
 
