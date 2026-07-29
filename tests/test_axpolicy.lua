@@ -100,4 +100,69 @@ t.test("budget recovers once old samples age out", function()
   runner.eq(b:isOverBudget(101.6), false)
 end)
 
+-- Regression guard. Every case above feeds TUNING, whose values are the
+-- production ones, so a module that inlined those same literals and ignored
+-- the table entirely would still pass all of them. The cases below feed
+-- deliberately contrasting values, so each one goes red if its constant is
+-- hardcoded rather than read.
+local function tuned(over)
+  local c = {}
+  for k, v in pairs(TUNING) do c[k] = v end
+  for k, v in pairs(over) do c[k] = v end
+  return c
+end
+
+t.test("cacheMaxAgeSeconds is read from tuning, not inlined", function()
+  local generous = tuned({cacheMaxAgeSeconds = 1})
+  runner.isTrue(axpolicy.isCacheUsable(cache(), 1000.3, 100, 200, 42, generous))
+  local strict = tuned({cacheMaxAgeSeconds = 0.01})
+  runner.eq(axpolicy.isCacheUsable(cache(), 1000.1, 100, 200, 42, strict), false)
+end)
+
+t.test("cacheTolerancePx is read from tuning, not inlined", function()
+  local loose = tuned({cacheTolerancePx = 25})
+  runner.isTrue(axpolicy.isCacheUsable(cache(), 1000.1, 120, 200, 42, loose))
+  local exact = tuned({cacheTolerancePx = 0})
+  runner.eq(axpolicy.isCacheUsable(cache(), 1000.1, 101, 200, 42, exact), false)
+end)
+
+t.test("breakerThreshold is read from tuning, not inlined", function()
+  local twitchy = axpolicy.newBreaker(tuned({breakerThreshold = 2}))
+  twitchy:recordFailure(7, 100); twitchy:recordFailure(7, 101)
+  runner.isTrue(twitchy:isOpen(7, 101))
+  local patient = axpolicy.newBreaker(tuned({breakerThreshold = 5}))
+  patient:recordFailure(7, 100); patient:recordFailure(7, 101)
+  patient:recordFailure(7, 102)
+  runner.eq(patient:isOpen(7, 102), false)
+end)
+
+t.test("breakerWindowSeconds is read from tuning, not inlined", function()
+  local long = axpolicy.newBreaker(tuned({breakerWindowSeconds = 100}))
+  long:recordFailure(7, 100); long:recordFailure(7, 105)
+  long:recordFailure(7, 120)
+  runner.isTrue(long:isOpen(7, 120))
+  local short = axpolicy.newBreaker(tuned({breakerWindowSeconds = 1}))
+  short:recordFailure(7, 100); short:recordFailure(7, 101)
+  short:recordFailure(7, 102)
+  runner.eq(short:isOpen(7, 102), false)
+end)
+
+t.test("breakerCooldownSeconds is read from tuning, not inlined", function()
+  local b = axpolicy.newBreaker(tuned({breakerCooldownSeconds = 5}))
+  b:recordFailure(7, 100); b:recordFailure(7, 100); b:recordFailure(7, 100)
+  runner.isTrue(b:isOpen(7, 104))
+  runner.eq(b:isOpen(7, 105), false)
+end)
+
+t.test("the probe budget and window are read from tuning, not inlined", function()
+  local wide = axpolicy.newBreaker(tuned({probeWindowSeconds = 10}))
+  wide:noteProbeTime(0.04, 100.0); wide:noteProbeTime(0.04, 100.2)
+  wide:noteProbeTime(0.04, 100.4)
+  runner.isTrue(wide:isOverBudget(101.6))
+  local rich = axpolicy.newBreaker(tuned({probeBudgetSeconds = 0.5}))
+  rich:noteProbeTime(0.04, 100.0); rich:noteProbeTime(0.04, 100.2)
+  rich:noteProbeTime(0.04, 100.4)
+  runner.eq(rich:isOverBudget(100.4), false)
+end)
+
 return t
