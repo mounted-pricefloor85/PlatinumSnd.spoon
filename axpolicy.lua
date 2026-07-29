@@ -12,6 +12,30 @@ function axpolicy.isCacheUsable(cache, now, x, y, pid, tuning)
   return true
 end
 
+-- Returns true when (x, y) lies within the frame rectangle. A nil frame is
+-- never a containment, so a missing AXFrame degrades to probing every tick
+-- rather than silently pinning the cache.
+--
+-- The rectangle is half-open: the top and left edges are inside, the bottom
+-- and right edges are not. Adjacent AX frames tile a window edge to edge, so
+-- a fully closed test would claim the seam belongs to both neighbours; this
+-- way it belongs to exactly one. It also makes a zero-size frame contain
+-- nothing, which keeps a degenerate frame from pinning the cache to a point.
+--
+-- Deliberately separate from isCacheUsable. This is an extra elision for the
+-- hover loop only; the click path still answers to the staleness and
+-- tolerance rules above, which are about how old the ground truth is rather
+-- than where the cursor sits.
+function axpolicy.isInsideFrame(frame, x, y)
+  if type(frame) ~= "table" then return false end
+  local fx, fy, fw, fh = frame.x, frame.y, frame.w, frame.h
+  if type(fx) ~= "number" or type(fy) ~= "number"
+    or type(fw) ~= "number" or type(fh) ~= "number" then
+    return false
+  end
+  return x >= fx and x < fx + fw and y >= fy and y < fy + fh
+end
+
 local Breaker = {}
 Breaker.__index = Breaker
 

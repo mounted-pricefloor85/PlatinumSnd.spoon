@@ -154,6 +154,56 @@ t.test("breakerCooldownSeconds is read from tuning, not inlined", function()
   runner.eq(b:isOpen(7, 105), false)
 end)
 
+-- Frame containment. This is the hover loop's IPC elision test: while the
+-- cursor sits inside the frame the last probe reported, the answer cannot
+-- have changed, so no round trip into the app is needed.
+--
+-- The rectangle is half-open: the top and left edges belong to it, the
+-- bottom and right edges belong to the next widget along. That matches how
+-- adjacent AX frames tile a window without overlapping, and it makes a
+-- zero-size frame contain nothing at all rather than pinning the cache to a
+-- single degenerate point.
+local FRAME = {x = 10, y = 20, w = 100, h = 50}
+
+t.test("a point well inside the frame is inside", function()
+  runner.isTrue(axpolicy.isInsideFrame(FRAME, 50, 40))
+end)
+
+t.test("a point left of the frame is outside", function()
+  runner.eq(axpolicy.isInsideFrame(FRAME, 9, 40), false)
+end)
+
+t.test("a point right of the frame is outside", function()
+  runner.eq(axpolicy.isInsideFrame(FRAME, 111, 40), false)
+end)
+
+t.test("a point above the frame is outside", function()
+  runner.eq(axpolicy.isInsideFrame(FRAME, 50, 19), false)
+end)
+
+t.test("a point below the frame is outside", function()
+  runner.eq(axpolicy.isInsideFrame(FRAME, 50, 71), false)
+end)
+
+t.test("the top left edge is inside, the bottom right edge is not", function()
+  runner.isTrue(axpolicy.isInsideFrame(FRAME, 10, 20))
+  runner.eq(axpolicy.isInsideFrame(FRAME, 110, 40), false)
+  runner.eq(axpolicy.isInsideFrame(FRAME, 50, 70), false)
+end)
+
+t.test("a nil frame is never a containment", function()
+  runner.eq(axpolicy.isInsideFrame(nil, 50, 40), false)
+end)
+
+t.test("a zero size frame contains nothing, not even its origin", function()
+  runner.eq(axpolicy.isInsideFrame({x = 10, y = 20, w = 0, h = 0}, 10, 20),
+            false)
+end)
+
+t.test("a frame missing width and height is never a containment", function()
+  runner.eq(axpolicy.isInsideFrame({x = 10, y = 20}, 10, 20), false)
+end)
+
 t.test("the probe budget and window are read from tuning, not inlined", function()
   local wide = axpolicy.newBreaker(tuned({probeWindowSeconds = 10}))
   wide:noteProbeTime(0.04, 100.0); wide:noteProbeTime(0.04, 100.2)

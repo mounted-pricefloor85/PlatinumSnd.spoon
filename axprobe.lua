@@ -48,6 +48,23 @@ function Probe:roleAt(x, y)
   local gotRole, role = pcall(function()
     return element:attributeValue("AXRole")
   end)
+
+  -- Fetch the bounds in the same visit. This one extra attribute is what
+  -- lets the hover loop skip whole probes while the cursor stays inside the
+  -- widget, so it buys back far more round-trips than it costs. Only worth
+  -- asking when the role came back: on an element that just timed out, the
+  -- second read would only buy a second timeout.
+  --
+  -- Not every element publishes AXFrame. A miss is not a probe failure --
+  -- the role is still good, the hover loop just cannot elide the next tick.
+  local frame
+  if gotRole and role ~= nil then
+    local gotFrame, value = pcall(function()
+      return element:attributeValue("AXFrame")
+    end)
+    if gotFrame then frame = value end
+  end
+
   -- Measure the whole probe, not just the hit-test. attributeValue is the
   -- other AX round-trip, and a budget that cannot see it will read "under
   -- budget" while real AX spend runs over.
@@ -60,7 +77,18 @@ function Probe:roleAt(x, y)
   end
 
   self.breaker:recordSuccess(pid)
-  return role, pid
+  return role, pid, frame
+end
+
+-- Hand the process-wide AX timeout back. Hammerspoon documents 0.0 on the
+-- system-wide element as "reset the global default", so this undoes exactly
+-- what new() did rather than guessing at a prior value. Without it the 50 ms
+-- bound outlives the Spoon and keeps applying to hs.window, hs.uielement and
+-- every other AX consumer in the process.
+function Probe:release()
+  if self.released then return end
+  self.released = true
+  pcall(function() self.sys:setTimeout(0.0) end)
 end
 
 function Probe:stats()
