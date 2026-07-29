@@ -19,6 +19,7 @@ obj.tuning = {
   breakerWindowSeconds   = 10,
   breakerCooldownSeconds = 30,
   probeBudgetSeconds     = 0.1,
+  probeWindowSeconds     = 1,
   finderCoalesceSeconds  = 0.2,
   finderGraceSeconds     = 2,
   poolSize               = 3,
@@ -75,11 +76,13 @@ end
 function obj:toggle()
   if self.running then
     self:stop()
-    hs.alert.show("PlatinumSnd off")
   else
     self:start()
-    hs.alert.show("PlatinumSnd on")
   end
+  -- Report the state we ended up in, not the one we intended. start() bails
+  -- out without starting when Accessibility is denied, and announcing "on"
+  -- there would be the only user-facing surface telling a flat lie.
+  hs.alert.show(self.running and "PlatinumSnd on" or "PlatinumSnd off")
   return self
 end
 
