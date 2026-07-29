@@ -29,6 +29,17 @@ t.test("app launch owns flap, and nothing else claims it", function()
   runner.isNil(soundmap.bases["misc.flap"])
 end)
 
+-- Regression guard on the decode. Three of these were guesses the plan had
+-- pointed at the wrong events, and the Finder source depends on the
+-- corrected reading: ftrs is the Trash being emptied, fnew one item
+-- appearing, fcpd several appearing at once.
+t.test("the Finder source's four sounds keep their decoded bases", function()
+  runner.eq(soundmap.bases["finder.select"], "fsel")
+  runner.eq(soundmap.bases["finder.new"], "fnew")
+  runner.eq(soundmap.bases["finder.copydone"], "fcpd")
+  runner.eq(soundmap.bases["finder.trash"], "ftrs")
+end)
+
 t.test("no two semantic names share a base", function()
   local seen = {}
   for semantic, base in pairs(soundmap.bases) do

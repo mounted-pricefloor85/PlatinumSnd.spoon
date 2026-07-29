@@ -29,6 +29,11 @@ obj.tuning = {
   probeWindowSeconds         = 1,
   finderCoalesceSeconds      = 0.2,
   finderGraceSeconds         = 2,
+  -- Relative to $HOME. The places a user actually creates and copies things;
+  -- watching the whole home directory would pick up every application's
+  -- support files and caches.
+  finderWatchedDirs          = {"Desktop", "Documents", "Downloads"},
+  finderTrashDir             = ".Trash",
   dragSampleSeconds          = 0.1,
   observerSweepSeconds       = 60,
   poolSize                   = 3,
@@ -50,6 +55,7 @@ function obj:init()
   self:register(dofile(hs.spoons.resourcePath("src_pointer.lua")))
   self:register(dofile(hs.spoons.resourcePath("src_windows.lua")))
   self:register(dofile(hs.spoons.resourcePath("src_menus.lua")))
+  self:register(dofile(hs.spoons.resourcePath("src_finder.lua")))
   return self
 end
 

@@ -61,14 +61,20 @@ soundmap.bases = {
   ["palette.close"]       = "pwcl",
   ["balloon.open"]        = "blno",
   ["balloon.close"]       = "blnc",
-  ["finder.new"]          = "fnew",
-  ["finder.select"]       = "fsel",
-  ["finder.drop"]         = "fdrp",
-  ["finder.copydone"]     = "fcpd",  -- guess
-  ["finder.trash"]        = "ftrs",
-  ["finder.reveal"]       = "fral",  -- guess
-  ["finder.discloseon"]   = "fdon",  -- guess
-  ["finder.discloseoff"]  = "fdof",  -- guess
+  -- No longer guesses: docs/sound-decode.md ties every one of these to a
+  -- ThemeSoundKind constant. `ftrs` is the Trash being EMPTIED rather than an
+  -- item being thrown into it, and `fdon`/`fdof` are the cursor crossing a
+  -- droppable icon mid-drag rather than a list row opening -- so their
+  -- semantic names are now misnomers, renamed with the rest in Task 11. Row
+  -- disclosure has no sound in this pack and nothing is wired to it.
+  ["finder.new"]          = "fnew",  -- kThemeSoundNewItem
+  ["finder.select"]       = "fsel",  -- kThemeSoundSelectItem
+  ["finder.drop"]         = "fdrp",  -- kThemeSoundReceiveDrop
+  ["finder.copydone"]     = "fcpd",  -- kThemeSoundCopyDone
+  ["finder.trash"]        = "ftrs",  -- kThemeSoundEmptyTrash
+  ["finder.reveal"]       = "fral",  -- kThemeSoundResolveAlias, no signal
+  ["finder.discloseon"]   = "fdon",  -- kThemeSoundFinderDragOnIcon
+  ["finder.discloseoff"]  = "fdof",  -- kThemeSoundFinderDragOffIcon
   ["disk.insert"]         = "dski",
   ["disk.eject"]          = "dske",
   ["app.launch"]          = "flap",  -- kThemeSoundLaunchApp
