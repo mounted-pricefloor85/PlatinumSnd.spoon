@@ -125,4 +125,16 @@ end
 function obj:dryRun(enabled) self.engine:dryRun(enabled); return self end
 function obj:audition() self.engine:audition(); return self end
 
+-- The diagnostic harness. Loaded on demand rather than at init, so a Spoon
+-- nobody is diagnosing never pays for it: no file read, no table built, and
+-- no chance of a tool that exists to observe the Spoon changing it.
+--
+-- `:diagnose()` runs phases A to E and G by itself and takes about a minute;
+-- `:diagnose({guided = true})` adds the handful of steps that need a human,
+-- and `{delay = 10}` waits before starting so another app can be brought to
+-- the front for the accessibility walk. Writes ~/Desktop and the Console.
+function obj:diagnose(opts)
+  return dofile(hs.spoons.resourcePath("diagnose.lua"))(self, opts)
+end
+
 return obj

@@ -45,6 +45,34 @@ Registration order is fixed in `init.lua`:
 
 ---
 
+## Run the harness first
+
+```lua
+spoon.PlatinumSnd:diagnose()               -- about a minute, hands off the mouse
+spoon.PlatinumSnd:diagnose({guided = true})  -- adds the steps needing a human
+spoon.PlatinumSnd:diagnose({delay = 10})     -- wait, so another app can be fronted
+```
+
+It writes `~/Desktop/platinumsnd-diagnostics.txt` and prints the same report to
+the Console. Everything it reports is machine-recorded: a role the probe
+actually returned, a file that actually resolved, a probe count actually
+measured. Nothing in it is an impression.
+
+It answers, without a single click: §1.2, §1.3, all of §2 except 2.5, 2.6 and
+2.9, the decision half of §3.4, §3.6 and §3.9 (which role was found and which
+sound the maps chose for it — never whether that sound is right), §3.17, §4.2,
+and §5.4, §5.6, §5.8 and §5.10. `{guided = true}` records what arrives during
+§3.19, §3.20, §3.22, §3.24 and §3.27 without judging it.
+
+What it cannot answer is everything §1.5 and §6 are about, and every "does it
+sound right" in §3 and §4. Those are the ears' work and the reason the rest of
+this document exists. Run the harness, paste the report, then work down what it
+could not reach.
+
+Read the report bottom-up: the summary lists only the FAIL and WARN lines.
+`[----]` means not tested — usually a role that was not on screen, which is a
+gap in the test rather than a defect.
+
 ## The two diagnostic tools
 
 Everything else is diagnosable through these. Learn them first.
