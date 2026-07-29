@@ -39,13 +39,20 @@ end
 -- The ceiling on how long a role may survive on frame containment alone.
 --
 -- A successful elision refreshes the cache's `at`, because confirming the
--- cursor is still inside the same element's frame with the same app
--- frontmost is stronger evidence than "the sample is under a quarter of a
--- second old". That would otherwise let a role live forever, and a UI can
--- change under a resting cursor -- a button replaced in place by a progress
--- bar keeps the same bounds and reports a different role. So `probedAt`
--- records when an app was last actually asked, an elision never touches it,
--- and this caps the drift.
+-- cursor is still inside the same element's frame with the same app frontmost
+-- is stronger evidence than "the sample is under a quarter of a second old".
+-- That would otherwise let a role live forever, so `probedAt` records when an
+-- app was last actually asked, an elision never touches it, and this caps the
+-- drift for a cursor that is MOVING.
+--
+-- It does not cap a motionless one. The hover loop's resting-cursor branch
+-- returns before this function is ever reached, so a UI that changes under a
+-- genuinely still cursor -- a button replaced in place by a progress bar keeps
+-- the same bounds and reports a different role -- keeps its old role until the
+-- cursor twitches, with no ceiling at all. That is a deliberate trade, made to
+-- keep the zero-idle-cost property, and it is recorded under "Known judgement
+-- calls" in docs/mac-verification.md alongside the 2.4 check that pins the
+-- property it buys.
 --
 -- The ceiling arrives as an argument because the caller applies two of
 -- them. A cached leaf role gets a generous one: its frame cannot enclose a
@@ -102,6 +109,23 @@ function axpolicy.refinedRole(role, value)
   return entry[value] or role
 end
 
+-- Whether a table is a frame this module will compare. `type(t) == "table"`
+-- is not enough on its own: a table with missing or non-numeric fields passes
+-- that test and then compares unpredictably. Two of them compare EQUAL, since
+-- nil == nil four times over, which silences a real move; one nil field
+-- against a number compares unequal and blips on a widget the cursor never
+-- left. Neither answer is earned by anything that was measured.
+--
+-- Not a theoretical shape. `axprobe` stores whatever AXFrame handed back, and
+-- 2.1 in docs/mac-verification.md records that the flat {x, y, w, h} layout is
+-- read off Hammerspoon's source rather than confirmed on a Mac. An
+-- origin/size nesting arrives here as precisely this table.
+local function isFrame(t)
+  return type(t) == "table"
+    and type(t.x) == "number" and type(t.y) == "number"
+    and type(t.w) == "number" and type(t.h) == "number"
+end
+
 local function sameRect(a, b)
   return a.x == b.x and a.y == b.y and a.w == b.w and a.h == b.h
 end
@@ -120,17 +144,20 @@ end
 -- moved onto nothing. "Could not ask" is not "left", and sounding an exit
 -- there gives a phantom blip on a control the pointer is still resting on.
 --
--- Frames are optional: not every element publishes AXFrame. With one
--- missing, or malformed, there is no identity to compare and the roles
--- decide alone -- which errs towards silence rather than towards a blip on
--- every tick.
+-- Frames are optional: not every element publishes AXFrame. With one missing,
+-- or malformed, there is no identity to compare -- and since the roles are
+-- already known to be equal by the time that matters, the answer is silence.
+-- So a missing frame costs a blip that was earned, never adds one that was
+-- not, which is the right way round for a sound that fires on every crossing.
+--
+-- "Malformed" is checked field by field rather than by type alone, because a
+-- table with nil fields would otherwise reach sameRect and compare by
+-- accident. See `isFrame` above for what that gets wrong in both directions.
 function axpolicy.transitionSounds(previousRole, previousFrame,
                                    newRole, newFrame)
   if newRole == nil then return false end
   if previousRole ~= newRole then return true end
-  if type(previousFrame) ~= "table" or type(newFrame) ~= "table" then
-    return false
-  end
+  if not isFrame(previousFrame) or not isFrame(newFrame) then return false end
   return not sameRect(previousFrame, newFrame)
 end
 

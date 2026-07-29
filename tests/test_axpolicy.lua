@@ -258,6 +258,54 @@ t.test("a malformed frame is treated as no identity, not as a move",
               false)
   end)
 
+-- A table is not enough. `type(frame) == "table"` passes for a table whose
+-- fields are missing or non-numeric, and comparing those field by field is
+-- not a defensible identity test: two frames with nil fields compare EQUAL
+-- and silence a real move, while one nil field against a number compares
+-- unequal and blips on a widget the cursor never left. Neither answer is
+-- earned, so a frame is only an identity when all four fields are numbers.
+--
+-- Reachable rather than theoretical: `axprobe` stores whatever AXFrame
+-- returned, and 2.1 in docs/mac-verification.md is the open question of
+-- whether that shape is flat {x, y, w, h} on a real Mac at all. An
+-- origin/size nesting arrives here as exactly this table.
+t.test("a frame with nil fields is no identity, not an equal frame", function()
+  runner.eq(axpolicy.transitionSounds("AXMenuItem", {}, "AXMenuItem", {}),
+            false)
+  runner.eq(axpolicy.transitionSounds("AXMenuItem", {x = 0, y = 0},
+                                      "AXMenuItem", {x = 0, y = 0}), false)
+  runner.eq(axpolicy.transitionSounds("AXMenuItem", A, "AXMenuItem",
+                                      {x = 0, y = 0}), false)
+  runner.eq(axpolicy.transitionSounds("AXMenuItem", {x = 0, y = 0},
+                                      "AXMenuItem", A), false)
+end)
+
+-- The nesting AXFrame might really arrive in, spelled out. It has numeric
+-- content, so nothing shallow catches it -- only checking the four fields
+-- does. Two different elements would both read as "no identity" here, which
+-- costs a missed blip and never a wrong one.
+t.test("an origin/size nesting is no identity", function()
+  local nested = {origin = {x = 0, y = 0}, size = {w = 10, h = 10}}
+  local other = {origin = {x = 0, y = 40}, size = {w = 10, h = 10}}
+  runner.eq(axpolicy.transitionSounds("AXMenuItem", nested, "AXMenuItem",
+                                      other), false)
+end)
+
+-- Non-numeric fields are the same class of malformation as missing ones.
+t.test("a frame with non-numeric fields is no identity", function()
+  local bogus = {x = "0", y = "0", w = "10", h = "10"}
+  runner.eq(axpolicy.transitionSounds("AXMenuItem", bogus, "AXMenuItem",
+                                      bogus), false)
+end)
+
+-- The guard must not swallow a genuine move. Four numbers on both sides is
+-- what the whole per-menu-item blip depends on.
+t.test("two well formed frames still compare as identities", function()
+  runner.isTrue(axpolicy.transitionSounds("AXMenuItem", A, "AXMenuItem", B))
+  runner.eq(axpolicy.transitionSounds("AXMenuItem", A, "AXMenuItem",
+                                      {x = 0, y = 0, w = 10, h = 10}), false)
+end)
+
 -- Regression guard. Every case above feeds TUNING, whose values are the
 -- production ones, so a module that inlined those same literals and ignored
 -- the table entirely would still pass all of them. The cases below feed

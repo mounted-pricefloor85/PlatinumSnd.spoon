@@ -64,16 +64,46 @@ local TABLE = {
   -- Menu items are owned by src_menus for press/release. The pointer layer
   -- contributes only the highlight, so clicking one does not sound twice.
   AXMenuItem = {enter = "menu.item"},
+  -- The menu bar title, and the panel a menu opens as. Both silent, and both
+  -- need an entry to say so -- without one they fall through to the generic
+  -- click below, and pressing a menu bar title gave three sounds for one
+  -- gesture: `btnp` from here, `mnuo` from the observer, then `btnr` on the
+  -- release. OS 9 gave `mnuo` alone, and this is the most frequent gesture in
+  -- the whole shell to have got it wrong.
+  --
+  -- No enter or exit either. The bar is not a tracking surface in this pack:
+  -- `mnui` is kThemeSoundMenuItemHilite and belongs to items inside an open
+  -- menu, which AXMenuItem above owns.
+  --
+  -- KNOWINGLY ACCEPTED. Menu extras and status items belong to accessory apps,
+  -- which src_menus skips on `kind() ~= 1`, so those menus have no observer to
+  -- supply the `mnuo` this defers to. For them these two entries turn a wrong
+  -- sound into no sound. That is the better failure of the two, and it is the
+  -- same trade already recorded under "Known judgement calls" in
+  -- docs/mac-verification.md for accessory-app menus generally.
+  AXMenuBarItem = {},
+  AXMenu = {},
 }
 
 local GENERIC = {press = "button.press", release = "button.release"}
 
--- Roles that cannot hold a differently-roled child. Accessibility elements
--- nest and a hit-test descends to the deepest one at the point, so a probe
--- landing on container-only space -- toolbar background, a scroll area, the
--- panel of a menu between its items -- caches a frame that ENCLOSES children
--- with other roles. Frame containment is only a sound proxy for "the answer
--- cannot have changed" when the cached role is one of these.
+-- Roles treated as unable to hold a differently-roled child. Accessibility
+-- elements nest and a hit-test descends to the deepest one at the point, so a
+-- probe landing on container-only space -- toolbar background, a scroll area,
+-- the panel of a menu between its items -- caches a frame that ENCLOSES
+-- children with other roles. Frame containment is only a sound proxy for "the
+-- answer cannot have changed" when the cached role is one of these.
+--
+-- ONE EXCEPTION, listed knowingly: AXSlider encloses its AXValueIndicator
+-- thumb. So a slider cached by the hover loop keeps answering "slider" for
+-- the cursor moving onto its own thumb, and a click there inside
+-- `cacheRevalidateSeconds` plays `slider.press` rather than falling through
+-- to the thumb's silence. Benign -- `sltp` is kThemeSoundSliderTrackPress and
+-- a press on a slider is what happened -- and the alternative costs a probe
+-- every fifth of a second for every cursor resting anywhere on a slider. What
+-- is NOT affected is grabbing the thumb to drag it: the press is what opens
+-- the `sbth` envelope, and reaching the thumb means moving onto it, which is
+-- exactly what makes the hover loop probe and re-cache.
 --
 -- This is a containment question, not a sound question. AXStaticText and
 -- AXValueIndicator are leaves with no entry in TABLE at all, while
@@ -88,12 +118,16 @@ local GENERIC = {press = "button.press", release = "button.release"}
 -- hover loop would re-probe one the cursor is sitting on every fifth of a
 -- second -- and each of those probes now carries the extra attribute read.
 -- Leafness is what keeps that cost to once per crossing.
+-- AXMenuBarItem is here for the cost reason above rather than the sound one:
+-- a cursor resting on a menu bar title would otherwise sit on the short
+-- container ceiling and re-probe five times a second. AXMenu is deliberately
+-- absent -- it is the panel, and it holds the items.
 local LEAF = {
   AXButton = true, AXCloseButton = true, AXCheckBox = true,
   AXRadioButton = true, AXTab = true,
   AXDisclosureTriangle = true, AXPopUpButton = true, AXSlider = true,
-  AXMenuItem = true, AXValueIndicator = true, AXIncrementor = true,
-  AXStaticText = true,
+  AXMenuItem = true, AXMenuBarItem = true, AXValueIndicator = true,
+  AXIncrementor = true, AXStaticText = true,
 }
 
 function rolemap.isLeafRole(role)

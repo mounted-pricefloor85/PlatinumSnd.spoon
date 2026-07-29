@@ -51,6 +51,38 @@ t.test("menu items are silent on press, owned by the menu source", function()
   runner.eq(rolemap.semantic("AXMenuItem", "enter"), "menu.item")
 end)
 
+-- Pressing a menu bar title is the commonest gesture in the whole shell, and
+-- without an entry of its own it fell through to the generic click: `btnp` on
+-- the press, `mnuo` from the observer, `btnr` on the release. Three sounds
+-- where OS 9 gave one. AXMenuItem already had an entry for exactly this
+-- reason; the menu BAR item was the one that was missed.
+--
+-- The panel role goes with it. A press that lands on the menu's own background
+-- rather than on one of its items is not a button either.
+t.test("a menu bar item is silent, leaving the open sound to the observer",
+  function()
+    runner.isNil(rolemap.semantic("AXMenuBarItem", "press"))
+    runner.isNil(rolemap.semantic("AXMenuBarItem", "release"))
+    runner.isNil(rolemap.semantic("AXMenu", "press"))
+    runner.isNil(rolemap.semantic("AXMenu", "release"))
+  end)
+
+-- The silencing above is by role, not a widening of the fallthrough. An
+-- ordinary button must still click, or the entries above have gone too far.
+t.test("silencing the menu bar leaves the generic click intact", function()
+  runner.eq(rolemap.semantic("AXButton", "press"), "button.press")
+  runner.eq(rolemap.semantic("AXButton", "release"), "button.release")
+  runner.eq(rolemap.semantic("AXGroup", "press"), "button.press")
+  runner.eq(rolemap.semantic("AXGroup", "release"), "button.release")
+end)
+
+-- Leafness for the menu bar title, which is a cost question rather than a
+-- sound one. Without it the hover loop puts a cursor resting on the Apple menu
+-- on the short container ceiling and re-probes it five times a second.
+t.test("a menu bar item is a leaf, so hovering it stops re-probing", function()
+  runner.isTrue(rolemap.isLeafRole("AXMenuBarItem"))
+end)
+
 -- docs/sound-decode.md settles what the scroll bar sounds are. `sbtp` is
 -- kThemeSoundScrollTrackPress -- the trough being clicked, not the thumb --
 -- and the thumb's own sound is the `sbth` attack-sustain-decay set, an
