@@ -56,6 +56,11 @@ end
 
 return runner
 
+-- Every suite, from this directory:
+--   lua5.4 -e 'require("test_resolver"); require("test_soundmap");
+--     require("test_axpolicy"); require("test_rolemap"); require("test_fgate");
+--     require("test_menugate"); os.exit(require("runner").run())'
+--
 -- Fallback when no lua CLI is available. In the Hammerspoon console:
 --   package.path = hs.configdir ..
 --     "/Spoons/PlatinumSnd.spoon/?.lua;" .. hs.configdir ..

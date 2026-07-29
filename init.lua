@@ -45,6 +45,16 @@ obj.tuning = {
   -- a text editor from making one per keystroke.
   defaultButtonRecheckSeconds = 0.2,
   observerSweepSeconds        = 60,
+  -- How long a menu-level AXMenuItemSelected watcher may live without its
+  -- menu ever reporting closed. Not every app posts AXMenuClosed, so this is
+  -- what stops the observer fleet growing a watcher per menu ever opened. Far
+  -- longer than anyone holds a menu down mid-decision, and a menu still open
+  -- past it simply falls back to the application-level watcher.
+  menuWatchMaxSeconds         = 60,
+  -- How long one menu selection stays deduped. The application-level and
+  -- menu-level watchers can both deliver it, microseconds apart and in no
+  -- guaranteed order; a human cannot choose two menu items this fast.
+  menuSelectDedupeSeconds     = 0.1,
   poolSize                    = 3,
   volume                      = 0.5,
 }
