@@ -22,6 +22,13 @@ t.test("every sustained name also has a base mapping", function()
   end
 end)
 
+-- flap is kThemeSoundLaunchApp, so it belongs to an event the Spoon can
+-- actually observe rather than sitting in the unmapped misc group.
+t.test("app launch owns flap, and nothing else claims it", function()
+  runner.eq(soundmap.bases["app.launch"], "flap")
+  runner.isNil(soundmap.bases["misc.flap"])
+end)
+
 t.test("no two semantic names share a base", function()
   local seen = {}
   for semantic, base in pairs(soundmap.bases) do

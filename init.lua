@@ -23,6 +23,8 @@ obj.tuning = {
   probeWindowSeconds     = 1,
   finderCoalesceSeconds  = 0.2,
   finderGraceSeconds     = 2,
+  dragSampleSeconds      = 0.1,
+  observerSweepSeconds   = 60,
   poolSize               = 3,
   volume                 = 0.5,
 }
@@ -40,6 +42,8 @@ function obj:init()
     log = self.log,
   })
   self:register(dofile(hs.spoons.resourcePath("src_pointer.lua")))
+  self:register(dofile(hs.spoons.resourcePath("src_windows.lua")))
+  self:register(dofile(hs.spoons.resourcePath("src_menus.lua")))
   return self
 end
 

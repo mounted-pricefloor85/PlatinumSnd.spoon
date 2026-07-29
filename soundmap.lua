@@ -71,8 +71,8 @@ soundmap.bases = {
   ["finder.discloseoff"]  = "fdof",  -- guess
   ["disk.insert"]         = "dski",
   ["disk.eject"]          = "dske",
+  ["app.launch"]          = "flap",  -- kThemeSoundLaunchApp
   ["misc.threshold"]      = "tshd",  -- guess, unmapped to any event
-  ["misc.flap"]           = "flap",  -- guess, unmapped to any event
   ["misc.delay"]          = "delay", -- guess, unmapped to any event
 }
 
