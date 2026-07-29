@@ -1,0 +1,430 @@
+[
+  {
+    "Constant" : [
+
+    ],
+    "submodules" : [
+
+    ],
+    "Function" : [
+
+    ],
+    "Variable" : [
+      {
+        "doc" : "Every constant the Spoon uses, in one table. Timings are in seconds and\ndistances in points. Change a value before calling `start()`; the sources\nread the table when they start, not when they are registered.",
+        "stripped_doc" : [
+          "Every constant the Spoon uses, in one table. Timings are in seconds and",
+          "distances in points. Change a value before calling `start()`; the sources",
+          "read the table when they start, not when they are registered."
+        ],
+        "def" : "PlatinumSnd.tuning",
+        "desc" : "Every constant the Spoon uses, in one table. Timings are in seconds and",
+        "notes" : [
+
+        ],
+        "signature" : "PlatinumSnd.tuning",
+        "type" : "Variable",
+        "returns" : [
+
+        ],
+        "name" : "tuning",
+        "parameters" : [
+
+        ]
+      }
+    ],
+    "stripped_doc" : [
+
+    ],
+    "type" : "Module",
+    "Deprecated" : [
+
+    ],
+    "desc" : "Mac OS 9 Platinum interface sounds for modern macOS.",
+    "Constructor" : [
+
+    ],
+    "doc" : "Mac OS 9 Platinum interface sounds for modern macOS.",
+    "Method" : [
+      {
+        "doc" : "Starts making sounds. Loads the sound pack, installs the accessibility\ntimeout and starts every source. Does nothing if already running, and\nrefuses to start without Accessibility permission, alerting once and\nraising the system prompt instead.\n\nParameters:\n * None\n\nReturns:\n * The PlatinumSnd object",
+        "stripped_doc" : [
+          "Starts making sounds. Loads the sound pack, installs the accessibility",
+          "timeout and starts every source. Does nothing if already running, and",
+          "refuses to start without Accessibility permission, alerting once and",
+          "raising the system prompt instead.",
+          ""
+        ],
+        "def" : "PlatinumSnd:start()",
+        "desc" : "Starts making sounds. Loads the sound pack, installs the accessibility",
+        "notes" : [
+
+        ],
+        "signature" : "PlatinumSnd:start()",
+        "type" : "Method",
+        "returns" : [
+          " * The PlatinumSnd object"
+        ],
+        "name" : "start",
+        "parameters" : [
+          " * None",
+          ""
+        ]
+      },
+      {
+        "doc" : "Stops making sounds, and stops costing anything. Every event tap, timer,\nwatcher and accessibility observer is torn down and the process-wide\naccessibility timeout is handed back, so a stopped Spoon is inert rather\nthan muted. Does nothing if not running.\n\nParameters:\n * None\n\nReturns:\n * The PlatinumSnd object",
+        "stripped_doc" : [
+          "Stops making sounds, and stops costing anything. Every event tap, timer,",
+          "watcher and accessibility observer is torn down and the process-wide",
+          "accessibility timeout is handed back, so a stopped Spoon is inert rather",
+          "than muted. Does nothing if not running.",
+          ""
+        ],
+        "def" : "PlatinumSnd:stop()",
+        "desc" : "Stops making sounds, and stops costing anything. Every event tap, timer,",
+        "notes" : [
+
+        ],
+        "signature" : "PlatinumSnd:stop()",
+        "type" : "Method",
+        "returns" : [
+          " * The PlatinumSnd object"
+        ],
+        "name" : "stop",
+        "parameters" : [
+          " * None",
+          ""
+        ]
+      },
+      {
+        "doc" : "Starts the Spoon if it is stopped, stops it if it is running, and shows an\nalert saying which of those actually happened.\n\nParameters:\n * None\n\nReturns:\n * The PlatinumSnd object",
+        "stripped_doc" : [
+          "Starts the Spoon if it is stopped, stops it if it is running, and shows an",
+          "alert saying which of those actually happened.",
+          ""
+        ],
+        "def" : "PlatinumSnd:toggle()",
+        "desc" : "Starts the Spoon if it is stopped, stops it if it is running, and shows an",
+        "notes" : [
+
+        ],
+        "signature" : "PlatinumSnd:toggle()",
+        "type" : "Method",
+        "returns" : [
+          " * The PlatinumSnd object"
+        ],
+        "name" : "toggle",
+        "parameters" : [
+          " * None",
+          ""
+        ]
+      },
+      {
+        "doc" : "Binds the Spoon's hotkeys. One action is available, `toggle`.\n\nParameters:\n * mapping - A table mapping action names to a {mods, key} pair, for\n   example `{toggle = {{\"cmd\", \"alt\", \"ctrl\"}, \"9\"}}`\n\nReturns:\n * The PlatinumSnd object",
+        "stripped_doc" : [
+          "Binds the Spoon's hotkeys. One action is available, `toggle`.",
+          ""
+        ],
+        "def" : "PlatinumSnd:bindHotkeys(mapping)",
+        "desc" : "Binds the Spoon's hotkeys. One action is available, `toggle`.",
+        "notes" : [
+
+        ],
+        "signature" : "PlatinumSnd:bindHotkeys(mapping)",
+        "type" : "Method",
+        "returns" : [
+          " * The PlatinumSnd object"
+        ],
+        "name" : "bindHotkeys",
+        "parameters" : [
+          " * mapping - A table mapping action names to a {mods, key} pair, for",
+          "   example `{toggle = {{\"cmd\", \"alt\", \"ctrl\"}, \"9\"}}`",
+          ""
+        ]
+      },
+      {
+        "doc" : "Logs the sound each event would play instead of playing it. Lines look\nlike `AXCheckBox -> checkbox.press (chkp)`, which is how you find out why\nsomething sounded wrong.\n\nParameters:\n * enabled - true to log instead of play, false to go back to sounding\n\nReturns:\n * The PlatinumSnd object",
+        "stripped_doc" : [
+          "Logs the sound each event would play instead of playing it. Lines look",
+          "like `AXCheckBox -> checkbox.press (chkp)`, which is how you find out why",
+          "something sounded wrong.",
+          ""
+        ],
+        "def" : "PlatinumSnd:dryRun(enabled)",
+        "desc" : "Logs the sound each event would play instead of playing it. Lines look",
+        "notes" : [
+
+        ],
+        "signature" : "PlatinumSnd:dryRun(enabled)",
+        "type" : "Method",
+        "returns" : [
+          " * The PlatinumSnd object"
+        ],
+        "name" : "dryRun",
+        "parameters" : [
+          " * enabled - true to log instead of play, false to go back to sounding",
+          ""
+        ]
+      },
+      {
+        "doc" : "Plays every sound in the pack in sequence, printing each name to the\nConsole as it goes. Takes a bit over a minute. Use it to confirm the pack\nloaded and to learn what each of the four letter names sounds like.\n\nParameters:\n * None\n\nReturns:\n * The PlatinumSnd object",
+        "stripped_doc" : [
+          "Plays every sound in the pack in sequence, printing each name to the",
+          "Console as it goes. Takes a bit over a minute. Use it to confirm the pack",
+          "loaded and to learn what each of the four letter names sounds like.",
+          ""
+        ],
+        "def" : "PlatinumSnd:audition()",
+        "desc" : "Plays every sound in the pack in sequence, printing each name to the",
+        "notes" : [
+
+        ],
+        "signature" : "PlatinumSnd:audition()",
+        "type" : "Method",
+        "returns" : [
+          " * The PlatinumSnd object"
+        ],
+        "name" : "audition",
+        "parameters" : [
+          " * None",
+          ""
+        ]
+      },
+      {
+        "doc" : "Runs a diagnostic harness against the live Hammerspoon: permissions, the\nsound pack, the accessibility assumptions the design rests on, the\ndecision chain over whatever is on screen, the cache hit rate, and\nteardown. Writes a report to the Desktop and prints it to the Console. It\nmoves the cursor briefly and puts it back, and touches nothing else of\nyours.\n\nParameters:\n * opts - An optional table. `guided = true` adds the steps that need you\n   to open a menu or drag a file. `delay = 10` waits that many seconds\n   before starting, so another application can be brought to the front\n   for the accessibility walk.\n\nReturns:\n * None",
+        "stripped_doc" : [
+          "Runs a diagnostic harness against the live Hammerspoon: permissions, the",
+          "sound pack, the accessibility assumptions the design rests on, the",
+          "decision chain over whatever is on screen, the cache hit rate, and",
+          "teardown. Writes a report to the Desktop and prints it to the Console. It",
+          "moves the cursor briefly and puts it back, and touches nothing else of",
+          "yours.",
+          ""
+        ],
+        "def" : "PlatinumSnd:diagnose([opts])",
+        "desc" : "Runs a diagnostic harness against the live Hammerspoon: permissions, the",
+        "notes" : [
+
+        ],
+        "signature" : "PlatinumSnd:diagnose([opts])",
+        "type" : "Method",
+        "returns" : [
+          " * None"
+        ],
+        "name" : "diagnose",
+        "parameters" : [
+          " * opts - An optional table. `guided = true` adds the steps that need you",
+          "   to open a menu or drag a file. `delay = 10` waits that many seconds",
+          "   before starting, so another application can be brought to the front",
+          "   for the accessibility walk.",
+          ""
+        ]
+      }
+    ],
+    "Command" : [
+
+    ],
+    "Field" : [
+
+    ],
+    "items" : [
+      {
+        "doc" : "Every constant the Spoon uses, in one table. Timings are in seconds and\ndistances in points. Change a value before calling `start()`; the sources\nread the table when they start, not when they are registered.",
+        "stripped_doc" : [
+          "Every constant the Spoon uses, in one table. Timings are in seconds and",
+          "distances in points. Change a value before calling `start()`; the sources",
+          "read the table when they start, not when they are registered."
+        ],
+        "def" : "PlatinumSnd.tuning",
+        "desc" : "Every constant the Spoon uses, in one table. Timings are in seconds and",
+        "notes" : [
+
+        ],
+        "signature" : "PlatinumSnd.tuning",
+        "type" : "Variable",
+        "returns" : [
+
+        ],
+        "name" : "tuning",
+        "parameters" : [
+
+        ]
+      },
+      {
+        "doc" : "Plays every sound in the pack in sequence, printing each name to the\nConsole as it goes. Takes a bit over a minute. Use it to confirm the pack\nloaded and to learn what each of the four letter names sounds like.\n\nParameters:\n * None\n\nReturns:\n * The PlatinumSnd object",
+        "stripped_doc" : [
+          "Plays every sound in the pack in sequence, printing each name to the",
+          "Console as it goes. Takes a bit over a minute. Use it to confirm the pack",
+          "loaded and to learn what each of the four letter names sounds like.",
+          ""
+        ],
+        "def" : "PlatinumSnd:audition()",
+        "desc" : "Plays every sound in the pack in sequence, printing each name to the",
+        "notes" : [
+
+        ],
+        "signature" : "PlatinumSnd:audition()",
+        "type" : "Method",
+        "returns" : [
+          " * The PlatinumSnd object"
+        ],
+        "name" : "audition",
+        "parameters" : [
+          " * None",
+          ""
+        ]
+      },
+      {
+        "doc" : "Binds the Spoon's hotkeys. One action is available, `toggle`.\n\nParameters:\n * mapping - A table mapping action names to a {mods, key} pair, for\n   example `{toggle = {{\"cmd\", \"alt\", \"ctrl\"}, \"9\"}}`\n\nReturns:\n * The PlatinumSnd object",
+        "stripped_doc" : [
+          "Binds the Spoon's hotkeys. One action is available, `toggle`.",
+          ""
+        ],
+        "def" : "PlatinumSnd:bindHotkeys(mapping)",
+        "desc" : "Binds the Spoon's hotkeys. One action is available, `toggle`.",
+        "notes" : [
+
+        ],
+        "signature" : "PlatinumSnd:bindHotkeys(mapping)",
+        "type" : "Method",
+        "returns" : [
+          " * The PlatinumSnd object"
+        ],
+        "name" : "bindHotkeys",
+        "parameters" : [
+          " * mapping - A table mapping action names to a {mods, key} pair, for",
+          "   example `{toggle = {{\"cmd\", \"alt\", \"ctrl\"}, \"9\"}}`",
+          ""
+        ]
+      },
+      {
+        "doc" : "Runs a diagnostic harness against the live Hammerspoon: permissions, the\nsound pack, the accessibility assumptions the design rests on, the\ndecision chain over whatever is on screen, the cache hit rate, and\nteardown. Writes a report to the Desktop and prints it to the Console. It\nmoves the cursor briefly and puts it back, and touches nothing else of\nyours.\n\nParameters:\n * opts - An optional table. `guided = true` adds the steps that need you\n   to open a menu or drag a file. `delay = 10` waits that many seconds\n   before starting, so another application can be brought to the front\n   for the accessibility walk.\n\nReturns:\n * None",
+        "stripped_doc" : [
+          "Runs a diagnostic harness against the live Hammerspoon: permissions, the",
+          "sound pack, the accessibility assumptions the design rests on, the",
+          "decision chain over whatever is on screen, the cache hit rate, and",
+          "teardown. Writes a report to the Desktop and prints it to the Console. It",
+          "moves the cursor briefly and puts it back, and touches nothing else of",
+          "yours.",
+          ""
+        ],
+        "def" : "PlatinumSnd:diagnose([opts])",
+        "desc" : "Runs a diagnostic harness against the live Hammerspoon: permissions, the",
+        "notes" : [
+
+        ],
+        "signature" : "PlatinumSnd:diagnose([opts])",
+        "type" : "Method",
+        "returns" : [
+          " * None"
+        ],
+        "name" : "diagnose",
+        "parameters" : [
+          " * opts - An optional table. `guided = true` adds the steps that need you",
+          "   to open a menu or drag a file. `delay = 10` waits that many seconds",
+          "   before starting, so another application can be brought to the front",
+          "   for the accessibility walk.",
+          ""
+        ]
+      },
+      {
+        "doc" : "Logs the sound each event would play instead of playing it. Lines look\nlike `AXCheckBox -> checkbox.press (chkp)`, which is how you find out why\nsomething sounded wrong.\n\nParameters:\n * enabled - true to log instead of play, false to go back to sounding\n\nReturns:\n * The PlatinumSnd object",
+        "stripped_doc" : [
+          "Logs the sound each event would play instead of playing it. Lines look",
+          "like `AXCheckBox -> checkbox.press (chkp)`, which is how you find out why",
+          "something sounded wrong.",
+          ""
+        ],
+        "def" : "PlatinumSnd:dryRun(enabled)",
+        "desc" : "Logs the sound each event would play instead of playing it. Lines look",
+        "notes" : [
+
+        ],
+        "signature" : "PlatinumSnd:dryRun(enabled)",
+        "type" : "Method",
+        "returns" : [
+          " * The PlatinumSnd object"
+        ],
+        "name" : "dryRun",
+        "parameters" : [
+          " * enabled - true to log instead of play, false to go back to sounding",
+          ""
+        ]
+      },
+      {
+        "doc" : "Starts making sounds. Loads the sound pack, installs the accessibility\ntimeout and starts every source. Does nothing if already running, and\nrefuses to start without Accessibility permission, alerting once and\nraising the system prompt instead.\n\nParameters:\n * None\n\nReturns:\n * The PlatinumSnd object",
+        "stripped_doc" : [
+          "Starts making sounds. Loads the sound pack, installs the accessibility",
+          "timeout and starts every source. Does nothing if already running, and",
+          "refuses to start without Accessibility permission, alerting once and",
+          "raising the system prompt instead.",
+          ""
+        ],
+        "def" : "PlatinumSnd:start()",
+        "desc" : "Starts making sounds. Loads the sound pack, installs the accessibility",
+        "notes" : [
+
+        ],
+        "signature" : "PlatinumSnd:start()",
+        "type" : "Method",
+        "returns" : [
+          " * The PlatinumSnd object"
+        ],
+        "name" : "start",
+        "parameters" : [
+          " * None",
+          ""
+        ]
+      },
+      {
+        "doc" : "Stops making sounds, and stops costing anything. Every event tap, timer,\nwatcher and accessibility observer is torn down and the process-wide\naccessibility timeout is handed back, so a stopped Spoon is inert rather\nthan muted. Does nothing if not running.\n\nParameters:\n * None\n\nReturns:\n * The PlatinumSnd object",
+        "stripped_doc" : [
+          "Stops making sounds, and stops costing anything. Every event tap, timer,",
+          "watcher and accessibility observer is torn down and the process-wide",
+          "accessibility timeout is handed back, so a stopped Spoon is inert rather",
+          "than muted. Does nothing if not running.",
+          ""
+        ],
+        "def" : "PlatinumSnd:stop()",
+        "desc" : "Stops making sounds, and stops costing anything. Every event tap, timer,",
+        "notes" : [
+
+        ],
+        "signature" : "PlatinumSnd:stop()",
+        "type" : "Method",
+        "returns" : [
+          " * The PlatinumSnd object"
+        ],
+        "name" : "stop",
+        "parameters" : [
+          " * None",
+          ""
+        ]
+      },
+      {
+        "doc" : "Starts the Spoon if it is stopped, stops it if it is running, and shows an\nalert saying which of those actually happened.\n\nParameters:\n * None\n\nReturns:\n * The PlatinumSnd object",
+        "stripped_doc" : [
+          "Starts the Spoon if it is stopped, stops it if it is running, and shows an",
+          "alert saying which of those actually happened.",
+          ""
+        ],
+        "def" : "PlatinumSnd:toggle()",
+        "desc" : "Starts the Spoon if it is stopped, stops it if it is running, and shows an",
+        "notes" : [
+
+        ],
+        "signature" : "PlatinumSnd:toggle()",
+        "type" : "Method",
+        "returns" : [
+          " * The PlatinumSnd object"
+        ],
+        "name" : "toggle",
+        "parameters" : [
+          " * None",
+          ""
+        ]
+      }
+    ],
+    "name" : "PlatinumSnd"
+  }
+]
