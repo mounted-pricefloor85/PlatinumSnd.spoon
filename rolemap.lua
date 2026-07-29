@@ -16,14 +16,26 @@ local TABLE = {
     enter = "disclosure.enter", exit = "disclosure.exit",
   },
   AXPopUpButton = {press = "popup.press", release = "popup.release"},
-  AXSlider = {press = "slider.press", release = "slider.release"},
-  AXScrollBar = {
-    press = "scrollarrow.press", release = "scrollarrow.release",
-  },
-  -- laup/ladr are almost certainly up and down rather than press and
-  -- release, but AXIncrementor does not report which half was hit. Both
-  -- map to press until auditioning settles it; Task 10 revisits this.
-  AXIncrementor = {press = "littlearrow.up"},
+  -- `sltp` is kThemeSoundSliderTrackPress. There is no release counterpart:
+  -- `slte` is kThemeSoundSliderEndOfTrack, the thumb hitting a stop, which
+  -- is a value question rather than a click one. Dragging the slider is the
+  -- `slgh` loop, and the pointer layer owns that.
+  AXSlider = {press = "slider.press"},
+  -- `sbtp` is kThemeSoundScrollTrackPress: the TROUGH being clicked, which
+  -- is the only part of a modern scroll bar you can press and let go of.
+  -- `sbap`/`sbar` are the arrow presses of a scroll bar macOS no longer
+  -- draws, so nothing here produces them.
+  AXScrollBar = {press = "scrolltrack.press"},
+  -- Both silent on purpose, and both need an entry to say so -- without one
+  -- they would fall through to the generic click below.
+  --
+  -- The thumb's sound is the `sbth` attack-sustain-decay envelope, which
+  -- spans a whole gesture rather than an instant, so only the pointer layer
+  -- can drive it. And `laup`/`ladr` are the UP press and the DOWN release of
+  -- a stepper, so which one a click earns depends on which half of the frame
+  -- it landed in -- geometry this table cannot see.
+  AXValueIndicator = {},
+  AXIncrementor = {},
   -- Menu items are owned by src_menus for press/release. The pointer layer
   -- contributes only the highlight, so clicking one does not sound twice.
   AXMenuItem = {enter = "menu.item"},
