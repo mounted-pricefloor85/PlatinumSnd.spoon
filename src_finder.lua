@@ -139,7 +139,17 @@ function src:attachFinder(app)
 
   observer:callback(function(_, _, notification)
     local semantic = WATCHED[notification]
-    if semantic then self.engine:play(semantic) end
+    if not semantic then return end
+    -- Gated on the same grace window as the filesystem watchers. Without it
+    -- any background change to Finder's selection makes noise -- a download
+    -- landing, a script writing a file, anything that alters what the Desktop
+    -- considers selected -- which is the false-positive class the gate exists
+    -- to prevent, arriving through the door the gate did not cover.
+    if not self.gate:shouldSoundSelection(hs.timer.secondsSinceEpoch(),
+      finderIsFrontmost()) then
+      return
+    end
+    self.engine:play(semantic)
   end)
 
   -- Individually guarded, and counted. An observer that registered nothing

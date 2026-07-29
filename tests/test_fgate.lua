@@ -41,6 +41,66 @@ t.test("still sounds at the far edge of the grace period", function()
   runner.isTrue(g:shouldSound(102))
 end)
 
+-- Selection. `AXSelectedChildrenChanged` arrives from Finder's own
+-- accessibility observer rather than from the filesystem, but it says just as
+-- little about who caused it: a download landing on the Desktop or a script
+-- writing a file changes what the Desktop considers selected, and that is the
+-- same false-positive class the gate above exists to prevent.
+--
+-- The second argument is the caller's reading of whether Finder is the front
+-- application at this instant. It refreshes the stamp, exactly as a
+-- filesystem event does, so a Finder left frontmost for minutes has not aged
+-- out of its own grace period by the time the user clicks a file.
+
+t.test("a selection with Finder never frontmost is silent", function()
+  local g = fgate.newGate(TUNING)
+  runner.eq(g:shouldSoundSelection(100, false), false)
+end)
+
+t.test("a selection with Finder frontmost sounds", function()
+  local g = fgate.newGate(TUNING)
+  runner.isTrue(g:shouldSoundSelection(100, true))
+end)
+
+-- The whole point of reusing the grace window rather than testing the front
+-- app strictly: clicking a background Finder window to select something makes
+-- Finder frontmost as part of the same gesture, and the notification can
+-- outrun the front-app reading. A strict test would eat that first selection.
+t.test("a selection just after Finder loses the front still sounds", function()
+  local g = fgate.newGate(TUNING)
+  g:noteFinderFront(100)
+  runner.isTrue(g:shouldSoundSelection(101, false))
+end)
+
+t.test("a selection long after Finder lost the front is silent", function()
+  local g = fgate.newGate(TUNING)
+  g:noteFinderFront(100)
+  runner.eq(g:shouldSoundSelection(103, false), false)
+end)
+
+t.test("the grace boundary belongs to the selection sound", function()
+  local g = fgate.newGate(TUNING)
+  g:noteFinderFront(100)
+  runner.isTrue(g:shouldSoundSelection(102, false))
+end)
+
+t.test("a selection refreshes the stamp for the ones behind it", function()
+  local g = fgate.newGate(TUNING)
+  g:noteFinderFront(100)
+  -- A minute of Finder sitting frontmost with nobody activating it.
+  runner.isTrue(g:shouldSoundSelection(160, true))
+  -- And the refresh carries the next one, which arrives as Finder goes away.
+  runner.isTrue(g:shouldSoundSelection(161, false))
+end)
+
+t.test("a background selection does not refresh the stamp", function()
+  local g = fgate.newGate(TUNING)
+  g:noteFinderFront(100)
+  runner.eq(g:shouldSoundSelection(103, false), false)
+  -- Were the lapsed selection stamping the gate, this would sound.
+  runner.eq(g:shouldSoundSelection(103.5, false), false)
+end)
+
 -- The burst accumulator. One item appearing is a new item; several appearing
 -- together is a copy finishing, and either way it sounds exactly once.
 
@@ -262,6 +322,15 @@ t.test("finderGraceSeconds is read from tuning, not inlined", function()
   local strict = fgate.newGate(tuned({finderGraceSeconds = 0.5}))
   strict:noteFinderFront(100)
   runner.eq(strict:shouldSound(101), false)
+end)
+
+t.test("selection reads finderGraceSeconds from tuning too", function()
+  local patient = fgate.newGate(tuned({finderGraceSeconds = 30}))
+  patient:noteFinderFront(100)
+  runner.isTrue(patient:shouldSoundSelection(120, false))
+  local strict = fgate.newGate(tuned({finderGraceSeconds = 0.5}))
+  strict:noteFinderFront(100)
+  runner.eq(strict:shouldSoundSelection(101, false), false)
 end)
 
 t.test("finderCoalesceSeconds is read from tuning, not inlined", function()

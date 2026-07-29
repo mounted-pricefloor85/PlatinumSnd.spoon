@@ -58,6 +58,32 @@ function Gate:shouldSound(now)
   return now - self.frontAt <= self.tuning.finderGraceSeconds
 end
 
+-- Whether a change to Finder's selection should sound. `frontNow` is the
+-- caller's reading of whether Finder is the front application at this
+-- instant.
+--
+-- The same rule as the filesystem path, and for the same reason. Selection
+-- reaches the Spoon through Finder's accessibility observer rather than
+-- through FSEvents, but the notification is no more informative about who
+-- caused it: a download landing on the Desktop, a script writing a file,
+-- anything at all that alters what a Finder window considers selected fires
+-- it, and that is precisely the false-positive class this gate exists to
+-- prevent -- arriving through the door the filesystem gate does not cover.
+--
+-- The stamp is refreshed here for the same reason onDirChange refreshes it:
+-- Finder can sit frontmost for minutes before the user clicks a file, and a
+-- stamp that only moved on activation would have aged out of the grace period
+-- long before the click it is meant to admit.
+--
+-- Deliberately the grace window rather than "Finder is frontmost right now".
+-- Clicking a background Finder window to select something makes Finder
+-- frontmost as part of the same gesture, and the notification can outrun the
+-- front-app reading; a strict test could swallow that first selection.
+function Gate:shouldSoundSelection(now, frontNow)
+  if frontNow then self:noteFinderFront(now) end
+  return self:shouldSound(now)
+end
+
 local function isDue(burst, now, tuning)
   return now - burst.openedAt >= tuning.finderCoalesceSeconds
 end
