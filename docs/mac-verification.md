@@ -243,6 +243,9 @@ a tuning change.
     `hs.axuielement.observer` on the menu bar element instead — a change to
     `src_menus.lua:attach`. This is the single most likely architectural
     failure in Task 8.
+  - **Settled on a real Mac:** `AXMenuOpened` and `AXMenuClosed` both arrive at
+    the application element. `AXMenuItemSelected`, documented identically,
+    mostly does not — see 3.22 for what was done about it.
 
 - [ ] **2.6 `AXSelectedChildrenChanged` reaches Finder's application element.**
     Click a file in a Finder window.
@@ -477,11 +480,38 @@ a tuning change.
     with the keyboard.
   - Expect: exactly one `mnus`, both ways. The keyboard case is why `mnus` is
     owned by the observer and not the pointer layer.
-  - Fails: see 4.1.
+  - There are now TWO watchers behind this one sound. Apple's header says
+    `AXMenuItemSelected` carries "the selected menu item UIElement" — the item
+    posts it — and separately that an observer on the application element hears
+    from any element in the app. The second half does not hold up in practice:
+    F2 recorded `mnuo`, four `mnui` and `mnuc` with no `mnus` between them,
+    while a later capture in the same run did get one. So `src_menus` keeps the
+    application-level registration and adds one on each menu as it opens,
+    taking it off again on `AXMenuClosed`, and dedupes on the element within
+    `menuSelectDedupeSeconds`.
+  - Fails: **two** `mnus` for one selection means the dedupe is not matching
+    the two deliveries — most likely the element handles are comparing unequal.
+    **Still none** in a given app means one of two things, and they need
+    telling apart: either that app does not forward the notification to the
+    menu either — in which case the watcher has to go on the menu items
+    themselves — or it posts `AXMenuItemSelected` *after* `AXMenuClosed`, by
+    which point the menu's watcher has already come off. For the second, hold
+    the watcher for a grace period past the close instead of removing it
+    there. Record which apps fall in which camp.
+  - Fails: see also 4.1.
 
 ### Finder
 
 - [ ] **3.23 Selection.** Click a file. → `fsel`. (Same check as 2.6.)
+  - Gated on Finder having been frontmost within `finderGraceSeconds`, the same
+    rule the filesystem watchers use — see 4.2. Deliberately not gated on
+    Finder being frontmost *right now*: clicking a background Finder window to
+    select something makes Finder frontmost as part of the same gesture, and
+    the notification can outrun the front-app reading.
+  - Fails: the FIRST click on a background Finder window being silent, with
+    later clicks sounding, means that race is real on this machine and the
+    grace window is not covering it — the stamp is arriving after the
+    notification rather than before.
 
 - [ ] **3.24 One new item.** With Finder frontmost, create a new folder on the
     Desktop, or copy a single file in.
@@ -551,7 +581,11 @@ a tuning change.
 - [ ] **4.2 Background file activity is silent.** With Finder **not** frontmost
     and more than 2 seconds since it was:
     `touch ~/Desktop/quiet-test.txt && sleep 3 && rm ~/Desktop/quiet-test.txt`
-  - Expect: silence.
+  - Expect: silence — including no `fsel`. A file arriving on the Desktop
+    changes what that window considers selected, so `AXSelectedChildrenChanged`
+    fires whether or not anyone is looking; a real run recorded exactly that,
+    with `com.highcaffeinecontent.radio` frontmost. Selection now answers to
+    the same grace window as the filesystem watchers.
   - Fails: a sound means the frontmost gate is not consulting app state — check
     the Finder app watcher is firing. Without this, Dropbox syncing and
     background downloads chatter constantly.

@@ -552,6 +552,21 @@ local function tapeHas(entries, semantic)
   return false
 end
 
+-- The entries in one semantic family, `finder` picking out `finder.new`,
+-- `finder.select` and the rest. For checks that have to judge what the harness
+-- did while a human is also using the machine.
+local function tapeFamily(entries, family)
+  local out = {}
+  local prefix = family .. "."
+  for _, entry in ipairs(entries) do
+    if type(entry.semantic) == "string"
+      and entry.semantic:sub(1, #prefix) == prefix then
+      table.insert(out, entry)
+    end
+  end
+  return out
+end
+
 -- ---- the step queue
 
 function H:add(name, fn, timeout)
@@ -1750,9 +1765,24 @@ function H:guidedFinderFile(step, done)
         self:verdict(tapeHas(created, "finder.new")
           or tapeHas(created, "finder.copydone"), step.id, text)
       else
-        self:verdict(#created == 0 and #departed == 0, step.id, text
-          .. " -- expected silence: the gate requires Finder to have been "
-          .. "frontmost within finderGraceSeconds")
+        -- Judged on the `finder.*` family ALONE, and deliberately so. This
+        -- step runs while a human is at the keyboard: the window it captures
+        -- fills with the buttons they press, the menus they pull down and the
+        -- windows they close, none of which a file appearing on the Desktop
+        -- could have caused. A check that counted those would fail on every
+        -- run that anyone was present for, and a check that always fails
+        -- teaches its reader to skip it. The narrowing is to the sounds this
+        -- file operation could plausibly be responsible for -- it is not a
+        -- blind spot in the pointer, window, menu or key layers, which have
+        -- their own checks elsewhere.
+        local quiet = #tapeFamily(created, "finder") == 0
+          and #tapeFamily(departed, "finder") == 0
+        self:verdict(quiet, step.id, text
+          .. " -- expected no finder.* sound: the gate requires Finder to "
+          .. "have been frontmost within finderGraceSeconds. Only the "
+          .. "finder.* family is judged; pointer, window, menu and key "
+          .. "sounds in the window above are the human at the keyboard, not "
+          .. "this file, and are ignored")
       end
       if removed == false and self:scratchStillThere(path, removeErr) then
         self:fail(step.id .. "!", "THE SCRATCH FILE COULD NOT BE REMOVED: "
@@ -1806,7 +1836,13 @@ local GUIDED = {
      .. "interrupted run would leave a volume mounted.",
    expect = {"disk.insert", "disk.eject"}},
   {id = "F7", instruction = "Launch an application that is not already "
-     .. "running.", expect = {"app.launch"}},
+     .. "running -- the one you picked out before this run started.",
+   hint = "Have it chosen and one gesture away BEFORE the window opens: in "
+     .. "the Dock, or in a Finder window already showing it. The window is "
+     .. "only " .. tostring(C.guidedWindowSeconds) .. " seconds, and a run "
+     .. "has already been lost to it elapsing while the app was still being "
+     .. "hunted for.",
+   expect = {"app.launch"}},
   -- Machine-driven rather than instructed, and the one step in this file that
   -- writes anything: `runner` marks it so, and it announces the exact path it
   -- will create and remove before it does either.
@@ -1823,6 +1859,13 @@ function H:phaseF(done)
     end
     return done()
   end
+  -- Said once, up front, because two of the steps need something to hand and
+  -- their own windows are far too short to go and find it in. F7 in
+  -- particular has already been lost to exactly that.
+  print("PlatinumSnd diagnose: two steps below need something ready before "
+    .. "their window opens -- F6 wants a disk image to mount (its own hint "
+    .. "says how to make a throwaway one), and F7 wants an application that "
+    .. "is not yet running, picked out and one gesture away.")
   -- The human is driving here, so let them hear it as well as have it
   -- recorded. Dry run goes back on afterwards.
   local engine = self.obj.engine
@@ -2032,6 +2075,15 @@ function H:phaseG(done)
         local count = call(source, "observerCount") or -1
         if count ~= 0 then
           table.insert(leaks, count .. " menu observers still attached")
+        end
+        -- The per-menu AXMenuItemSelected watchers. Stopping an observer
+        -- drops the watchers it holds, so this is really asking whether the
+        -- register that says which menus have one was emptied with it: an
+        -- entry outliving its observer is a claim about a watcher that is no
+        -- longer there, and the beginning of a fleet that only grows.
+        local menus = call(source, "menuWatchCount")
+        if menus and menus ~= 0 then
+          table.insert(leaks, menus .. " menu selection watchers still held")
         end
       end
       if spec.name == "src_finder" then
