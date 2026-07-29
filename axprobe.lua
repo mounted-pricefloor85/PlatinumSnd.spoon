@@ -80,6 +80,29 @@ function Probe:roleAt(x, y)
   return role, pid, frame
 end
 
+-- Which process owns the element at a point.
+--
+-- Deliberately not the pid roleAt reports. That one is the frontmost
+-- application, which is the right identity for the circuit breaker -- it is
+-- the app being asked -- but it is not who owns the window under the
+-- pointer. Dragging something does not bring the window beneath it to the
+-- front, so at the end of a drag the two answers routinely differ, and a
+-- drop cares about the window it landed on.
+--
+-- Bounded by the same 50 ms messaging timeout as everything else here, and
+-- asked once at the end of a gesture rather than on a loop, so it stays out
+-- of the probe budget. A nil answer means "could not tell", which every
+-- caller should read as "do not sound anything".
+function Probe:pidAt(x, y)
+  local ok, element = pcall(function()
+    return self.sys:elementAtPosition(x, y)
+  end)
+  if not ok or not element then return nil end
+  local gotPid, pid = pcall(function() return element:pid() end)
+  if not gotPid then return nil end
+  return pid
+end
+
 -- Hand the process-wide AX timeout back. Hammerspoon documents 0.0 on the
 -- system-wide element as "reset the global default", so this undoes exactly
 -- what new() did rather than guessing at a prior value. Without it the 50 ms

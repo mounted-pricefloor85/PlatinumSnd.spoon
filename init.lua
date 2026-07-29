@@ -11,33 +11,42 @@ obj.author = "Andrey Subbotin"
 obj.license = "MIT - https://opensource.org/licenses/MIT"
 
 obj.tuning = {
-  hoverIntervalSeconds       = 0.06,
-  cacheMaxAgeSeconds         = 0.25,
-  cacheTolerancePx           = 4,
+  hoverIntervalSeconds        = 0.06,
+  cacheMaxAgeSeconds          = 0.25,
+  cacheTolerancePx            = 4,
   -- How long a cached role may ride on frame containment alone. A leaf role
   -- gets the generous ceiling: its frame cannot enclose a child with some
   -- other role, so containment really does mean the answer has not changed.
   -- A container gets the short one, because a hit-test would have descended
   -- past it into children the cache has never seen.
-  cacheRevalidateSeconds     = 2,
-  containerRevalidateSeconds = 0.2,
-  axTimeoutSeconds           = 0.05,
-  breakerThreshold           = 3,
-  breakerWindowSeconds       = 10,
-  breakerCooldownSeconds     = 30,
-  probeBudgetSeconds         = 0.1,
-  probeWindowSeconds         = 1,
-  finderCoalesceSeconds      = 0.2,
-  finderGraceSeconds         = 2,
+  cacheRevalidateSeconds      = 2,
+  containerRevalidateSeconds  = 0.2,
+  axTimeoutSeconds            = 0.05,
+  breakerThreshold            = 3,
+  breakerWindowSeconds        = 10,
+  breakerCooldownSeconds      = 30,
+  probeBudgetSeconds          = 0.1,
+  probeWindowSeconds          = 1,
+  finderCoalesceSeconds       = 0.2,
+  finderGraceSeconds          = 2,
   -- Relative to $HOME. The places a user actually creates and copies things;
   -- watching the whole home directory would pick up every application's
   -- support files and caches.
-  finderWatchedDirs          = {"Desktop", "Documents", "Downloads"},
-  finderTrashDir             = ".Trash",
-  dragSampleSeconds          = 0.1,
-  observerSweepSeconds       = 60,
-  poolSize                   = 3,
-  volume                     = 0.5,
+  finderWatchedDirs           = {"Desktop", "Documents", "Downloads"},
+  finderTrashDir              = ".Trash",
+  dragSampleSeconds           = 0.1,
+  -- How far the pointer must travel between a press and its release for the
+  -- gesture to have been a drag rather than a click. A drag's release is not
+  -- a click and does not sound like one; well under this, a sloppy click is
+  -- still a click.
+  dragThresholdPx             = 10,
+  -- How long a Return that found no dialog suppresses the next check. The
+  -- check is one accessibility call, and this is what keeps a held Return in
+  -- a text editor from making one per keystroke.
+  defaultButtonRecheckSeconds = 0.2,
+  observerSweepSeconds        = 60,
+  poolSize                    = 3,
+  volume                      = 0.5,
 }
 
 obj.log = hs.logger.new("PlatinumSnd", "info")
@@ -56,6 +65,7 @@ function obj:init()
   self:register(dofile(hs.spoons.resourcePath("src_windows.lua")))
   self:register(dofile(hs.spoons.resourcePath("src_menus.lua")))
   self:register(dofile(hs.spoons.resourcePath("src_finder.lua")))
+  self:register(dofile(hs.spoons.resourcePath("src_keys.lua")))
   return self
 end
 
