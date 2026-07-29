@@ -10,6 +10,36 @@ t.test("buttons have the full tracking cycle", function()
   runner.eq(rolemap.semantic("AXButton", "exit"), "button.exit")
 end)
 
+-- A radio button is a radio button. The tab entries below are a refinement
+-- of this role, not a replacement for it, so the plain case has to keep
+-- sounding exactly as it did.
+t.test("radio buttons have the full tracking cycle", function()
+  runner.eq(rolemap.semantic("AXRadioButton", "press"), "radio.press")
+  runner.eq(rolemap.semantic("AXRadioButton", "release"), "radio.release")
+  runner.eq(rolemap.semantic("AXRadioButton", "enter"), "radio.enter")
+  runner.eq(rolemap.semantic("AXRadioButton", "exit"), "radio.exit")
+end)
+
+-- AXCloseButton and AXTab are SYNTHETIC roles. macOS reports neither as an
+-- AXRole: the probe mints them when a button's AXSubrole says AXCloseButton,
+-- and when a radio button's parent is an AXTabGroup. Refining the role
+-- string is what keeps this table a plain role lookup.
+t.test("a close box has the full tracking cycle", function()
+  runner.eq(rolemap.semantic("AXCloseButton", "press"), "closebox.press")
+  runner.eq(rolemap.semantic("AXCloseButton", "release"), "closebox.release")
+  runner.eq(rolemap.semantic("AXCloseButton", "enter"), "closebox.enter")
+  runner.eq(rolemap.semantic("AXCloseButton", "exit"), "closebox.exit")
+end)
+
+-- The pack has dedicated tab sounds, so a tab sounding like a radio button
+-- was a mapping the decode disproved rather than a judgement call.
+t.test("a tab has the full tracking cycle", function()
+  runner.eq(rolemap.semantic("AXTab", "press"), "tab.press")
+  runner.eq(rolemap.semantic("AXTab", "release"), "tab.release")
+  runner.eq(rolemap.semantic("AXTab", "enter"), "tab.enter")
+  runner.eq(rolemap.semantic("AXTab", "exit"), "tab.exit")
+end)
+
 t.test("checkboxes have no enter or exit sound", function()
   runner.eq(rolemap.semantic("AXCheckBox", "press"), "checkbox.press")
   runner.isNil(rolemap.semantic("AXCheckBox", "enter"))
@@ -52,22 +82,33 @@ t.test("an incrementor is silent until geometry decides", function()
   runner.isNil(rolemap.semantic("AXIncrementor", "release"))
 end)
 
--- Five of the pack's sounds are owned by nothing on purpose: `sbap`/`sbar`
--- are the arrows of a scroll bar modern macOS no longer draws, `slte` needs
--- the slider's value compared against its bounds on every drag tick, and
--- `bevp`/`bevr` would need an AXParent round trip per probe to tell a
--- toolbar button from any other. This guards the decision against a role
--- quietly acquiring one of them again.
+-- Ten of the pack's sounds are owned by nothing on purpose, and this is the
+-- list. `sbap`/`sbar` are the arrows of a scroll bar modern macOS no longer
+-- draws; `slte` needs the slider's value compared against its bounds on every
+-- drag tick; `bevp`/`bevr` would need an AXParent round trip on every button
+-- probe -- the commonest probe there is -- to tell a toolbar button from any
+-- other; `blno`/`blnc` are balloon help, and macOS does not announce tooltips;
+-- `fral` is alias resolution, which surfaces nowhere observable; and `tshd`
+-- and `delay` are sound-track internals rather than events at all. This guards
+-- the decision against a role quietly acquiring one of them again.
+--
+-- The AXParent read the tab refinement does costs the same as the one `bevp`
+-- was rejected for, but it is charged only on a radio button rather than on
+-- every button, which is why one is affordable and the other is not.
 t.test("no role produces a deliberately unmapped sound", function()
   local banned = {
     ["scrollarrow.press"] = true, ["scrollarrow.release"] = true,
     ["slider.endoftrack"] = true,
     ["bevel.press"] = true, ["bevel.release"] = true,
+    ["balloon.open"] = true, ["balloon.close"] = true,
+    ["finder.reveal"] = true,
+    ["misc.threshold"] = true, ["misc.delay"] = true,
   }
   local roles = {"AXButton", "AXCheckBox", "AXRadioButton",
                  "AXDisclosureTriangle", "AXPopUpButton", "AXSlider",
                  "AXScrollBar", "AXValueIndicator", "AXIncrementor",
-                 "AXMenuItem", "AXToolbar", "AXGroup", "AXStaticText"}
+                 "AXMenuItem", "AXToolbar", "AXGroup", "AXStaticText",
+                 "AXCloseButton", "AXTab", "AXTabGroup"}
   for _, role in ipairs(roles) do
     for _, action in ipairs({"press", "release", "enter", "exit"}) do
       runner.isNil(banned[rolemap.semantic(role, action)],
@@ -107,6 +148,17 @@ t.test("the interactive leaf roles are leaves", function()
                          "AXStaticText"}) do
     runner.isTrue(rolemap.isLeafRole(role), role .. " should be a leaf")
   end
+end)
+
+-- The synthetic roles refine a leaf, so they are leaves too. It has to be
+-- said out loud: a missing entry drops them to the short container ceiling,
+-- and a cursor resting on a close box would then re-probe five times a second
+-- -- each probe now carrying the extra attribute read this refinement costs.
+-- AXTabGroup, the container the probe reads to mint AXTab, stays a non-leaf.
+t.test("the synthetic roles are leaves", function()
+  runner.isTrue(rolemap.isLeafRole("AXCloseButton"))
+  runner.isTrue(rolemap.isLeafRole("AXTab"))
+  runner.eq(rolemap.isLeafRole("AXTabGroup"), false)
 end)
 
 t.test("container roles are not leaves", function()

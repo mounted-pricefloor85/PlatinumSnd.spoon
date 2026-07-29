@@ -1,4 +1,10 @@
 -- PURE. AX role -> semantic sound name, per action.
+--
+-- Two of the roles below are SYNTHETIC: `AXCloseButton` and `AXTab`. macOS
+-- reports neither as an AXRole -- `axprobe` mints them from a second
+-- attribute (a button's AXSubrole, a radio button's parent role) and hands
+-- them on in the role slot, so this table stays a plain role lookup. See
+-- `axpolicy.refinedRole` for the rule that produces them.
 local rolemap = {}
 
 local TABLE = {
@@ -6,10 +12,29 @@ local TABLE = {
     press = "button.press", release = "button.release",
     enter = "button.enter", exit = "button.exit",
   },
+  -- SYNTHETIC ROLE. The window's red traffic light, an AXButton whose
+  -- AXSubrole is AXCloseButton. `wclp`/`wclr`/`wcle`/`wclx` are the four
+  -- kThemeSoundWindowClose* constants -- OS 9 tracked the close box the same
+  -- way it tracked a push button, press through release and enter through
+  -- exit, and the pack carries all four.
+  --
+  -- Distinct from `window.close`: `wcls` is the window actually going away,
+  -- which src_windows owns and which also fires for a Cmd-W nobody clicked.
+  AXCloseButton = {
+    press = "closebox.press", release = "closebox.release",
+    enter = "closebox.enter", exit = "closebox.exit",
+  },
   AXCheckBox = {press = "checkbox.press", release = "checkbox.release"},
   AXRadioButton = {
     press = "radio.press", release = "radio.release",
     enter = "radio.enter", exit = "radio.exit",
+  },
+  -- SYNTHETIC ROLE. A tab, which macOS models as an AXRadioButton child of
+  -- an AXTabGroup. Without the refinement these sound as radio buttons, and
+  -- the pack has four dedicated tab sounds saying they should not.
+  AXTab = {
+    press = "tab.press", release = "tab.release",
+    enter = "tab.enter", exit = "tab.exit",
   },
   AXDisclosureTriangle = {
     press = "disclosure.press", release = "disclosure.release",
@@ -56,8 +81,16 @@ local GENERIC = {press = "button.press", release = "button.release"}
 -- the two arrow buttons. Anything absent -- every container, every role
 -- nobody has mapped, and nil -- is not a leaf, which is the safe answer
 -- because it only costs a probe.
+--
+-- The two synthetic roles are leaves because the roles they refine are, and
+-- refining a role cannot give it children. Listing them matters: a missing
+-- entry would put a close box or a tab on the short container ceiling, so the
+-- hover loop would re-probe one the cursor is sitting on every fifth of a
+-- second -- and each of those probes now carries the extra attribute read.
+-- Leafness is what keeps that cost to once per crossing.
 local LEAF = {
-  AXButton = true, AXCheckBox = true, AXRadioButton = true,
+  AXButton = true, AXCloseButton = true, AXCheckBox = true,
+  AXRadioButton = true, AXTab = true,
   AXDisclosureTriangle = true, AXPopUpButton = true, AXSlider = true,
   AXMenuItem = true, AXValueIndicator = true, AXIncrementor = true,
   AXStaticText = true,

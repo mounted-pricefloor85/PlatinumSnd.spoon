@@ -323,6 +323,66 @@ t.test("the probe budget and window are read from tuning, not inlined", function
   runner.eq(rich:isOverBudget(100.4), false)
 end)
 
+-- Role refinement. A close box and a tab are not distinguishable by AXRole
+-- alone: the first is an AXButton whose AXSubrole is AXCloseButton, and the
+-- second is an AXRadioButton whose parent is an AXTabGroup. The probe reads
+-- the one extra attribute and hands the answer here; this decides what the
+-- pair means. Pure, so the decision is testable off a Mac while the reads
+-- themselves are not.
+--
+-- The result is a SYNTHETIC role: macOS reports neither AXCloseButton nor
+-- AXTab as an AXRole. Refining the role string rather than returning another
+-- value is what keeps the probe cache, the frame elision and the role map
+-- unchanged by all of this.
+t.test("a close box is a button whose subrole says so", function()
+  runner.eq(axpolicy.refinedRole("AXButton", "AXCloseButton"), "AXCloseButton")
+end)
+
+t.test("a tab is a radio button inside a tab group", function()
+  runner.eq(axpolicy.refinedRole("AXRadioButton", "AXTabGroup"), "AXTab")
+end)
+
+-- The refinement is opt-in per pair. Everything else keeps the role it
+-- arrived with, so the commonest widgets on screen sound exactly as before.
+t.test("every other subrole leaves a button a button", function()
+  for _, subrole in ipairs({"AXMinimizeButton", "AXZoomButton",
+                            "AXFullScreenButton", "AXToolbarButton",
+                            "AXSortButton"}) do
+    runner.eq(axpolicy.refinedRole("AXButton", subrole), "AXButton",
+      subrole .. " should not refine")
+  end
+end)
+
+t.test("a radio button outside a tab group stays a radio button", function()
+  for _, parent in ipairs({"AXGroup", "AXRadioGroup", "AXWindow"}) do
+    runner.eq(axpolicy.refinedRole("AXRadioButton", parent), "AXRadioButton",
+      "a radio button in " .. parent .. " should not refine")
+  end
+end)
+
+-- The two are not interchangeable. A button whose parent happens to be a tab
+-- group is still a button, and a radio button with an AXCloseButton subrole
+-- -- which cannot happen, but the table should not depend on that -- is still
+-- a radio button.
+t.test("a refinement value only applies to its own role", function()
+  runner.eq(axpolicy.refinedRole("AXButton", "AXTabGroup"), "AXButton")
+  runner.eq(axpolicy.refinedRole("AXRadioButton", "AXCloseButton"),
+            "AXRadioButton")
+end)
+
+-- An unreadable attribute is "no refinement", never a failure. The role in
+-- hand is still good; it is simply less specific than it might have been,
+-- which costs a nicer sound and nothing else.
+t.test("an unreadable refinement leaves the role alone", function()
+  runner.eq(axpolicy.refinedRole("AXButton", nil), "AXButton")
+  runner.eq(axpolicy.refinedRole("AXRadioButton", nil), "AXRadioButton")
+end)
+
+t.test("roles with no refinement pass straight through", function()
+  runner.eq(axpolicy.refinedRole("AXMenuItem", "AXCloseButton"), "AXMenuItem")
+  runner.isNil(axpolicy.refinedRole(nil, "AXCloseButton"))
+end)
+
 -- needsRevalidation takes its ceiling as an argument rather than a tuning
 -- table, so the guard is that it honours the number it was handed. Which of
 -- the two tuning ceilings applies is the hover loop's decision, and that

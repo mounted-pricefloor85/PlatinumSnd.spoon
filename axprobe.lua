@@ -5,6 +5,53 @@ Probe.__index = Probe
 
 local axprobe = {}
 
+-- Sharpen a role with the ONE extra attribute that tells two widgets apart
+-- from the roles they share, and return a SYNTHETIC role saying which.
+--
+-- macOS does not report a close box or a tab as a role of its own. The red
+-- traffic light is an AXButton whose AXSubrole is AXCloseButton; a tab is an
+-- AXRadioButton whose parent is an AXTabGroup. Between them those two facts
+-- unlock eight of the pack's sounds -- the whole `wcl*` close-box cycle and
+-- the whole `tab*` one -- and there is no cheaper signal for either.
+--
+-- WHAT THIS COSTS, AND WHY IT IS AFFORDABLE. Only a real probe reaches here,
+-- and the hover loop's frame elision means a real probe happens on a
+-- TRANSITION rather than on every tick. So this is one extra read per newly
+-- hovered widget, not sixteen a second: a button probe goes from three round
+-- trips to four, a radio button probe from three to five -- the parent is an
+-- element, so its role is a second hop. Both synthetic roles are leaves, so
+-- the elision covers them once they are known and a cursor resting on a close
+-- box pays nothing at all.
+--
+-- WHICH IS WHY THE GATING IS NARROW. The subrole is read only for a button
+-- and the parent only for a radio button; every other role returns before
+-- either. Nothing here may be lifted onto the elision path -- the whole
+-- budget argument above is that this runs on transitions only.
+--
+-- A read that fails is NOT a probe failure. The role in hand is still
+-- correct, merely less specific, so the answer is the plain role and the
+-- caller's failure counters and circuit breaker are left alone.
+local function refined(element, role)
+  if role == "AXButton" then
+    local ok, subrole = pcall(function()
+      return element:attributeValue("AXSubrole")
+    end)
+    if not ok then return role end
+    return axpolicy.refinedRole(role, subrole)
+  end
+
+  if role == "AXRadioButton" then
+    local ok, parentRole = pcall(function()
+      local parent = element:attributeValue("AXParent")
+      return parent and parent:attributeValue("AXRole")
+    end)
+    if not ok then return role end
+    return axpolicy.refinedRole(role, parentRole)
+  end
+
+  return role
+end
+
 function axprobe.new(tuning, log)
   local self = setmetatable({
     tuning = tuning,
@@ -63,6 +110,12 @@ function Probe:roleAt(x, y)
       return element:attributeValue("AXFrame")
     end)
     if gotFrame then frame = value end
+
+    -- Two roles are worth one more attribute to sharpen. Gated on the same
+    -- "the role came back" condition as the frame, and on the role itself
+    -- inside, so nothing else pays for it. See `refined` above for the cost
+    -- argument; the short version is that only a transition gets this far.
+    role = refined(element, role)
   end
 
   -- Measure the whole probe, not just the hit-test. attributeValue is the

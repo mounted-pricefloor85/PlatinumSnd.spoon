@@ -62,6 +62,46 @@ function axpolicy.needsRevalidation(cache, now, ceilingSeconds)
   return now - cache.probedAt > ceilingSeconds
 end
 
+-- Roles that mean more than AXRole alone can say, and the second attribute
+-- that settles them.
+--
+-- Both answers are SYNTHETIC ROLES. macOS reports neither `AXCloseButton` nor
+-- `AXTab` as an AXRole, ever -- the first is a SUBROLE promoted into the role
+-- slot, the second is invented here outright. They exist because refining the
+-- role STRING keeps everything downstream unchanged: the probe cache keeps its
+-- shape, `transitionSounds`, `isInsideFrame` and `isCacheUsable` never learn
+-- about them, and the role map needs one ordinary entry each.
+--
+--   AXButton      + AXSubrole == "AXCloseButton"  -> AXCloseButton
+--   AXRadioButton + parent AXRole == "AXTabGroup" -> AXTab
+--
+-- A macOS window's red traffic light is an AXButton whose AXSubrole is
+-- AXCloseButton, which is what unlocks `wclp`/`wclr`/`wcle`/`wclx` -- the
+-- whole OS 9 close-box tracking cycle. A macOS tab is an AXRadioButton child
+-- of an AXTabGroup, which is what unlocks `tabp`/`tabr`/`tabe`/`tabx` and
+-- stops tabs borrowing the radio button's sounds.
+--
+-- Keyed by the role rather than open-coded so that adding a third refinement
+-- is a table entry, and so that the "which roles pay for a second read" answer
+-- is in one readable place: exactly two, and neither is the generic case.
+local REFINE = {
+  AXButton = {AXCloseButton = "AXCloseButton"},
+  AXRadioButton = {AXTabGroup = "AXTab"},
+}
+
+-- What a role becomes once its refining attribute has been read.
+--
+-- `value` is whatever the probe got back -- a subrole for a button, the
+-- parent's role for a radio button -- and nil means the read failed or the
+-- attribute was absent. Nil is not an error here: an unrefined role is still
+-- a correct role, so the answer is simply the role that came in. Same for a
+-- role nobody refines, and for a value that belongs to the other pair.
+function axpolicy.refinedRole(role, value)
+  local entry = role and REFINE[role]
+  if not entry then return role end
+  return entry[value] or role
+end
+
 local function sameRect(a, b)
   return a.x == b.x and a.y == b.y and a.w == b.w and a.h == b.h
 end
