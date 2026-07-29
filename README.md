@@ -110,9 +110,13 @@ the copy loaded and tells you what each one actually sounds like.
 ## Install
 
 ```sh
-git clone https://github.com/YOURNAME/PlatinumSnd.spoon.git \
+git clone https://github.com/eploko/PlatinumSnd.spoon.git \
   ~/.hammerspoon/Spoons/PlatinumSnd.spoon
 ```
+
+Or download the zip, unpack it, and double click the `PlatinumSnd.spoon`
+folder. Hammerspoon installs a double clicked Spoon into
+`~/.hammerspoon/Spoons/` for you.
 
 Then add this to `~/.hammerspoon/init.lua`:
 
