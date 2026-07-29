@@ -9,7 +9,13 @@ obj.name = "PlatinumSnd"
 obj.version = "0.1"
 obj.author = "Andrey Subbotin"
 obj.license = "MIT - https://opensource.org/licenses/MIT"
+obj.homepage = "https://github.com/eploko/PlatinumSnd.spoon"
 
+--- PlatinumSnd.tuning
+--- Variable
+--- Every constant the Spoon uses, in one table. Timings are in seconds and
+--- distances in points. Change a value before calling `start()`; the sources
+--- read the table when they start, not when they are registered.
 obj.tuning = {
   hoverIntervalSeconds        = 0.06,
   cacheMaxAgeSeconds          = 0.25,
@@ -89,6 +95,18 @@ function obj:register(source)
   return self
 end
 
+--- PlatinumSnd:start()
+--- Method
+--- Starts making sounds. Loads the sound pack, installs the accessibility
+--- timeout and starts every source. Does nothing if already running, and
+--- refuses to start without Accessibility permission, alerting once and
+--- raising the system prompt instead.
+---
+--- Parameters:
+---  * None
+---
+--- Returns:
+---  * The PlatinumSnd object
 function obj:start()
   if self.running then return self end
   if not hs.accessibilityState() then
@@ -115,6 +133,18 @@ function obj:start()
   return self
 end
 
+--- PlatinumSnd:stop()
+--- Method
+--- Stops making sounds, and stops costing anything. Every event tap, timer,
+--- watcher and accessibility observer is torn down and the process-wide
+--- accessibility timeout is handed back, so a stopped Spoon is inert rather
+--- than muted. Does nothing if not running.
+---
+--- Parameters:
+---  * None
+---
+--- Returns:
+---  * The PlatinumSnd object
 function obj:stop()
   if not self.running then return self end
   for _, source in ipairs(self.sources) do
@@ -132,6 +162,16 @@ function obj:stop()
   return self
 end
 
+--- PlatinumSnd:toggle()
+--- Method
+--- Starts the Spoon if it is stopped, stops it if it is running, and shows an
+--- alert saying which of those actually happened.
+---
+--- Parameters:
+---  * None
+---
+--- Returns:
+---  * The PlatinumSnd object
 function obj:toggle()
   if self.running then
     self:stop()
@@ -145,6 +185,16 @@ function obj:toggle()
   return self
 end
 
+--- PlatinumSnd:bindHotkeys(mapping)
+--- Method
+--- Binds the Spoon's hotkeys. One action is available, `toggle`.
+---
+--- Parameters:
+---  * mapping - A table mapping action names to a {mods, key} pair, for
+---    example `{toggle = {{"cmd", "alt", "ctrl"}, "9"}}`
+---
+--- Returns:
+---  * The PlatinumSnd object
 function obj:bindHotkeys(mapping)
   -- bindHotkeysToSpec takes (spec, mapping): spec maps names to functions,
   -- mapping maps the same names to {mods, key}.
@@ -153,7 +203,30 @@ function obj:bindHotkeys(mapping)
   return self
 end
 
+--- PlatinumSnd:dryRun(enabled)
+--- Method
+--- Logs the sound each event would play instead of playing it. Lines look
+--- like `AXCheckBox -> checkbox.press (chkp)`, which is how you find out why
+--- something sounded wrong.
+---
+--- Parameters:
+---  * enabled - true to log instead of play, false to go back to sounding
+---
+--- Returns:
+---  * The PlatinumSnd object
 function obj:dryRun(enabled) self.engine:dryRun(enabled); return self end
+
+--- PlatinumSnd:audition()
+--- Method
+--- Plays every sound in the pack in sequence, printing each name to the
+--- Console as it goes. Takes a bit over a minute. Use it to confirm the pack
+--- loaded and to learn what each of the four letter names sounds like.
+---
+--- Parameters:
+---  * None
+---
+--- Returns:
+---  * The PlatinumSnd object
 function obj:audition() self.engine:audition(); return self end
 
 -- The diagnostic harness. Loaded on demand rather than at init, so a Spoon
@@ -164,6 +237,23 @@ function obj:audition() self.engine:audition(); return self end
 -- `:diagnose({guided = true})` adds the handful of steps that need a human,
 -- and `{delay = 10}` waits before starting so another app can be brought to
 -- the front for the accessibility walk. Writes ~/Desktop and the Console.
+--- PlatinumSnd:diagnose([opts])
+--- Method
+--- Runs a diagnostic harness against the live Hammerspoon: permissions, the
+--- sound pack, the accessibility assumptions the design rests on, the
+--- decision chain over whatever is on screen, the cache hit rate, and
+--- teardown. Writes a report to the Desktop and prints it to the Console. It
+--- moves the cursor briefly and puts it back, and touches nothing else of
+--- yours.
+---
+--- Parameters:
+---  * opts - An optional table. `guided = true` adds the steps that need you
+---    to open a menu or drag a file. `delay = 10` waits that many seconds
+---    before starting, so another application can be brought to the front
+---    for the accessibility walk.
+---
+--- Returns:
+---  * None
 function obj:diagnose(opts)
   return dofile(hs.spoons.resourcePath("diagnose.lua"))(self, opts)
 end
