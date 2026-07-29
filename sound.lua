@@ -22,6 +22,15 @@ function Sound.new(opts)
 end
 
 function Sound:load()
+  -- Idempotent: start() may call this more than once. Silence and drop the
+  -- previous objects first, otherwise a reload orphans looping sustainers
+  -- that release() can no longer reach.
+  for _, snd in pairs(self.sustainers) do
+    if snd:isPlaying() then snd:stop() end
+  end
+  self.pools = {}
+  self.sustainers = {}
+  self.paths = {}
   local map, missing = resolver.buildMap(self.root, soundmap.bases, fileExists)
   self.paths = map
   for semantic, path in pairs(map) do
@@ -98,6 +107,7 @@ function Sound:audition()
     print(string.format("%-22s %-14s %s", semantic,
       soundmap.bases[semantic], self.paths[semantic]))
     local snd = hs.sound.getByFile(self.paths[semantic])
+    self.auditionSound = snd -- retain: a collected sound stops mid-playback
     if snd then snd:volume(self.volume); snd:play() end
     index = index + 1
     hs.timer.doAfter(1.2, next_)
