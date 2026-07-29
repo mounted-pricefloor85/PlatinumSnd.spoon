@@ -2,16 +2,17 @@ local fgate = dofile(hs.spoons.resourcePath("fgate.lua"))
 
 local src = {}
 
--- Identity, not tuning: these name the one app and the one notification this
--- source exists to watch, the way src_menus names its notifications.
+-- Identity, not tuning: this names the one app the source exists to watch.
 local FINDER_BUNDLE = "com.apple.finder"
-local SELECTION_CHANGED = "AXSelectedChildrenChanged"
 
 -- `fdon`/`fdof` are kThemeSoundFinderDragOnIcon/OffIcon -- the cursor crossing
 -- a droppable icon mid-drag -- so they belong to the pointer layer, not here.
--- Row expand and collapse have no sound in this pack; nothing is wired to
--- them. `fral` (kThemeSoundResolveAlias) has no signal worth guessing at and
--- stays unmapped.
+-- Row expand and collapse have no sound in this pack, which is why no
+-- `AXRow*` notification appears below. `fral` (kThemeSoundResolveAlias) has no
+-- signal worth guessing at and stays unmapped.
+local WATCHED = {
+  AXSelectedChildrenChanged = "finder.select",
+}
 
 local function isFinder(app)
   return app ~= nil and app:bundleID() == FINDER_BUNDLE
@@ -21,14 +22,20 @@ local function finderIsFrontmost()
   return isFinder(hs.application.frontmostApplication())
 end
 
--- Whether this event is something arriving rather than something leaving.
+-- Whether this event changes what exists, and if so what the disk says now:
+-- true for an arrival, false for a departure, nil for neither.
 --
 -- FSEvents coalesces per path, so one entry can carry several flags at once.
--- `itemRenamed` fires on both ends of a move -- which is how a drag from
--- another folder arrives -- and a file created a moment ago may already be
--- gone, so existence on disk is what separates an arrival from a departure.
-local function appeared(path, flag)
-  if not (flag.itemCreated or flag.itemRenamed) then return false end
+-- A modification is not a change of existence and never counts -- a file
+-- being written to is not a new item. Created, renamed and removed all are,
+-- and each is handed over with what is on disk now, because `itemRenamed`
+-- fires on both ends of a move and a file created a moment ago may already be
+-- gone. The gate decides what a pair of them means: an arrival and a
+-- departure under one parent is a rename, not an appearance.
+local function existenceChange(path, flag)
+  if not (flag.itemCreated or flag.itemRenamed or flag.itemRemoved) then
+    return nil
+  end
   return hs.fs.attributes(path) ~= nil
 end
 
@@ -102,7 +109,10 @@ function src:onDirChange(paths, flags)
     -- No flag table means no way to tell an arrival from a departure, so the
     -- path is skipped rather than guessed at.
     local flag = flags and flags[i]
-    if flag and appeared(path, flag) and self.gate:noteAppeared(path, now) then
+    -- Compared against nil deliberately: false is a departure, which the gate
+    -- very much wants to hear about.
+    local exists = flag and existenceChange(path, flag)
+    if exists ~= nil and self.gate:noteChange(path, exists, now) then
       self:scheduleSettle()
     end
   end
@@ -110,33 +120,52 @@ end
 
 function src:attachFinder(app)
   if not isFinder(app) then return end
+  -- Read the pid before tearing anything down: an app object that cannot
+  -- answer must not cost us a working observer.
+  local pid = app:pid()
+  if not pid then return end
   -- A relaunched Finder has a new pid, and an observer is bound to the pid it
   -- was made for, so the old one is dead weight however it got here.
   self:detachFinder()
-  local pid = app:pid()
-  if not pid then return end
 
   local ok, observer = pcall(hs.axuielement.observer.new, pid)
   if not ok or not observer then return end
 
   local element = hs.axuielement.applicationElement(app)
-  if not element then return end
+  if not element then
+    pcall(function() observer:stop() end)
+    return
+  end
 
   observer:callback(function(_, _, notification)
-    if notification == SELECTION_CHANGED then
-      self.engine:play("finder.select")
-    end
+    local semantic = WATCHED[notification]
+    if semantic then self.engine:play(semantic) end
   end)
 
-  local added = pcall(function()
-    observer:addWatcher(element, SELECTION_CHANGED)
-  end)
-  if not added then return end
+  -- Individually guarded, and counted. An observer that registered nothing
+  -- would sit there watching for a notification it never asked for, and
+  -- recording it would tell the retry in start() that all was well -- leaving
+  -- selection silent for the session, with no error and no second chance,
+  -- because Finder does not relaunch again in normal use.
+  local registered = 0
+  for notification in pairs(WATCHED) do
+    if pcall(function() observer:addWatcher(element, notification) end) then
+      registered = registered + 1
+    end
+  end
+  if registered == 0 then
+    pcall(function() observer:stop() end)
+    return
+  end
 
   -- Recorded only once it is actually running, so stop() never has an
-  -- observer to shut down that was never started.
+  -- observer to shut down that was never started, and a failure here leaves
+  -- the source unattached and retryable rather than holding a dead handle.
   if pcall(function() observer:start() end) then
     self.observer = observer
+    self.observerPid = pid
+  else
+    pcall(function() observer:stop() end)
   end
 end
 
@@ -145,6 +174,7 @@ function src:detachFinder()
     pcall(function() self.observer:stop() end)
     self.observer = nil
   end
+  self.observerPid = nil
 end
 
 function src:start(ctx)
@@ -185,6 +215,13 @@ function src:start(ctx)
   self.appWatcher = hs.application.watcher.new(function(_, event, app)
     if event == hs.application.watcher.activated and isFinder(app) then
       self.gate:noteFinderFront(hs.timer.secondsSinceEpoch())
+      -- A retry that costs nothing. Attachment can fail transiently, and it
+      -- can also go stale: Finder can be relaunched without a terminated
+      -- event ever reaching us, leaving an observer bound to a pid that no
+      -- longer exists. Keying on the pid covers both, and Finder activates
+      -- constantly in normal use, so selection heals within seconds instead
+      -- of staying silent for the session. No timer, no sweeper.
+      if self.observerPid ~= app:pid() then self:attachFinder(app) end
     elseif event == hs.application.watcher.launched then
       self:attachFinder(app)
     elseif event == hs.application.watcher.terminated and isFinder(app) then
