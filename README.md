@@ -43,10 +43,8 @@ inside `System Folder:Appearance:Sound Sets` in Mac OS 8.5 through 9.2.2. They
 are not mine to redistribute, so `snd/` is empty here and you supply your own
 copy.
 
-Download a set from the web. The Internet Archive has one under
-[Mac OS 8.5 to 9.2.2 Platinum Sounds](https://archive.org/details/mac-os-85-9-platinum-sounds),
-and the sounds also turn up in various OS 9 sound set collections. Any copy
-works as long as the names match.
+Search the web for "Mac OS 9 Platinum Sounds". Extracted sets turn up in a few
+places. Any copy works as long as the filenames match the ones below.
 
 Put them here:
 
