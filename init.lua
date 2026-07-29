@@ -1,6 +1,16 @@
 --- === PlatinumSnd ===
 ---
 --- Mac OS 9 Platinum interface sounds for modern macOS.
+---
+--- The sound pack is NOT included and this Spoon is silent until you add it.
+--- The sounds are Apple's, from the Platinum Sounds set that shipped with
+--- Mac OS 8.5 through 9.2.2, and are not mine to redistribute, so `snd/` is
+--- empty here. The README says where to find a copy and lists every filename
+--- the loader expects.
+---
+--- Needs Accessibility permission, and Full Disk Access for the Finder
+--- sounds. Run `spoon.PlatinumSnd:audition()` once the pack is in place to
+--- confirm it loaded.
 
 local obj = {}
 obj.__index = obj

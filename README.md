@@ -2,6 +2,10 @@
 
 Mac OS 9 interface sounds on modern macOS, as a [Hammerspoon](https://www.hammerspoon.org) Spoon.
 
+**The sound pack is not included and this Spoon is silent until you add it.**
+The sounds are Apple's and are not mine to redistribute.
+[Skip to the section on getting them](#the-sound-pack-is-not-in-this-repository).
+
 Click a button and hear `btnp`. Slide down a menu and hear each item highlight.
 Drag a window and hear the sustained scrape that changes timbre when you pause.
 Throw a disk on the desktop, collapse a window, click a close box. If you used a
