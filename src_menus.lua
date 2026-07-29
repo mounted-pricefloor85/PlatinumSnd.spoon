@@ -34,8 +34,13 @@ function src:start(ctx)
   -- force quit, a watcher started after the app was already gone -- and the
   -- observer for its pid would then sit in the table forever. Reconcile
   -- against the list of processes that actually exist.
+  --
+  -- Wrapped, because an hs.timer stops itself for good on an unhandled error.
+  -- A sweeper that disarms itself is exactly the leak it was put here to
+  -- prevent, and nothing would be left to notice observerCount() climbing.
   self.sweeper = hs.timer.doEvery(ctx.tuning.observerSweepSeconds, function()
-    self:sweep()
+    local ok, err = pcall(function() self:sweep() end)
+    if not ok then self.log.e("observer sweep: " .. tostring(err)) end
   end)
 end
 
@@ -47,11 +52,15 @@ function src:attach(app)
   local pid = app:pid()
   if not pid or self.observers[pid] then return end
 
-  local ok, observer = pcall(hs.axuielement.observer.new, pid)
-  if not ok or not observer then return end
-
+  -- Every precondition that needs nothing built comes first. An observer
+  -- created and then abandoned on an early return could never be reached
+  -- again -- detach() and stop() only walk the table -- so on the two paths
+  -- below that do abandon one, it is stopped explicitly on the way out.
   local element = hs.axuielement.applicationElement(app)
   if not element then return end
+
+  local ok, observer = pcall(hs.axuielement.observer.new, pid)
+  if not ok or not observer then return end
 
   observer:callback(function(_, _, notification)
     local semantic = WATCHED[notification]
@@ -60,16 +69,31 @@ function src:attach(app)
 
   -- Individually guarded: an app that refuses one notification should still
   -- be observed for the others it does publish.
+  local registered = 0
   for notification in pairs(WATCHED) do
-    pcall(function() observer:addWatcher(element, notification) end)
+    if pcall(function() observer:addWatcher(element, notification) end) then
+      registered = registered + 1
+    end
+  end
+
+  -- An app is announced as launched before its accessibility tree is
+  -- necessarily ready -- hs.window.filter retries its own registrations for
+  -- the same reason. A pid that registered nothing would otherwise be
+  -- recorded deaf and, because the table itself is the guard against
+  -- re-attaching, stay deaf for as long as the app lived. Leaving it
+  -- unrecorded is what lets the sweep try it again.
+  if registered == 0 then
+    pcall(function() observer:stop() end)
+    return
   end
 
   -- Only recorded once it is actually running, so the table never holds an
   -- observer that stop() would then try to shut down.
-  local started = pcall(function() observer:start() end)
-  if started then
-    self.observers[pid] = observer
+  if not pcall(function() observer:start() end) then
+    pcall(function() observer:stop() end)
+    return
   end
+  self.observers[pid] = observer
 end
 
 function src:detach(pid)
@@ -81,11 +105,16 @@ function src:detach(pid)
   end
 end
 
+-- Reconciliation in both directions, not reaping alone: attach() leaves a pid
+-- unrecorded when its accessibility tree was not ready yet, and this is what
+-- comes back for it. Safe to insert from, because the loop that attaches
+-- walks the application list while only the second loop walks self.observers.
 function src:sweep()
   local alive = {}
   for _, app in ipairs(hs.application.runningApplications()) do
     local pid = app:pid()
     if pid then alive[pid] = true end
+    self:attach(app)
   end
   -- Clearing an existing key during a pairs() traversal is defined behaviour
   -- in Lua; adding one would not be, and this loop adds nothing.
