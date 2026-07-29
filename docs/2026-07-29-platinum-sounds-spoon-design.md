@@ -159,21 +159,37 @@ buttons, radios, tabs, disclosure triangles. Transitions into other roles are
 recorded silently, since sounding every transition would blip constantly over
 text and empty space.
 
-**Role mapping.**
+**Role mapping.** Revised after implementation against `sound-decode.md`, which
+identified the pack's names as Apple `ThemeSoundKind` constants and disproved
+several guesses this table originally carried. This is what shipped:
 
 | AX role | press / release | enter / exit |
 |---|---|---|
 | `AXButton` | `btnp` / `btnr` | `btne` / `btnx` |
+| `AXCloseButton` (synthetic) | `wclp` / `wclr` | `wcle` / `wclx` |
 | `AXCheckBox` | `chkp` / `chkr` | — |
 | `AXRadioButton` | `radp` / `radr` | `rade` / `radx` |
-| tab in `AXTabGroup` | `tabp` / `tabr` | `tabe` / `tabx` |
+| `AXTab` (synthetic) | `tabp` / `tabr` | `tabe` / `tabx` |
 | `AXDisclosureTriangle` | `dscp` / `dscr` | `dsce` / `dscx` |
 | `AXPopUpButton` | `popp` / `popr` | — |
-| `AXSlider` | `sltp` / `slte` | — |
-| `AXScrollBar` arrow | `sbap` / `sbar` | — |
-| scrollbar thumb | `sbtp` + sustained `sbth` | — |
+| `AXSlider` | `sltp`, then sustained `slgh` while dragging | — |
+| `AXScrollBar` (the trough) | `sbtp` | — |
+| `AXValueIndicator` (the thumb) | sustained `sbth`, with attack and decay | — |
+| `AXIncrementor` | `laup` upper half / `ladr` lower half | — |
 | `AXMenuItem` | — (see below) | `mnui` on highlight |
 | anything else | `btnp` / `btnr` | — |
+
+Two roles are **synthetic**: macOS reports neither. `AXCloseButton` is an
+`AXButton` whose `AXSubrole` says so, and `AXTab` is an `AXRadioButton` whose
+parent is an `AXTabGroup`. `axprobe` refines the role string rather than
+widening the cache, so the subrole read happens only for buttons, the parent
+read only for radio buttons, and neither ever happens on the elision path.
+
+Three corrections worth naming, since the original table had them wrong:
+`sbtp` is `ScrollTrackPress` — clicking the trough, not pressing the thumb;
+`slte` is `SliderEndOfTrack`, which needs per-tick value polling and is
+therefore left unmapped; and `sbap`/`sbar` are scroll *arrow* sounds, for
+which modern macOS has no equivalent.
 
 **Menu items are deliberately silent on click in this layer.** `mnus` is owned
 by the menu observer, which also catches keyboard-driven selection that the
@@ -235,10 +251,26 @@ Balloon help (`blno` / `blnc`) has no clean modern equivalent and is unmapped.
 
 ## Finder
 
-An observer on Finder's pid gives `AXSelectedChildrenChanged` → `fsel` and row
-expand/collapse → `fdon` / `fdof`. Path watchers on Desktop, Documents,
-Downloads and `~/.Trash` give `fnew` and `ftrs`. `fdrp` comes from the pointer
-layer noticing a drag that ended over a Finder window.
+Revised after implementation against `sound-decode.md`, which disproved three of
+this section's original mappings.
+
+An observer on Finder's pid gives `AXSelectedChildrenChanged` → `fsel`. Path
+watchers on Desktop, Documents, Downloads and `~/.Trash` give `fnew` for a
+single item appearing and `fcpd` for two or more together — a copy finishing.
+`ftrs` is `kThemeSoundEmptyTrash`, so it fires when `~/.Trash` goes from
+non-empty to empty, **not** when something is thrown into it; dragging a file
+to the Trash is silent. `fdrp` comes from the pointer layer noticing a drag
+that ended over a Finder window.
+
+`fdon` / `fdof` are `FinderDragOnIcon` / `OffIcon` — they fire while dragging,
+as the cursor crosses a droppable element with Finder frontmost. They belong to
+the pointer layer, not here. Row expand and collapse, which this section
+originally claimed them for, have no sound in this pack at all.
+
+An arrival is netted against a departure under the same parent directory before
+the burst is counted, so renaming a file in place is silent — a renamed item did
+not appear. That also stops the standard new-folder flow sounding twice, once on
+creation and again when the name is typed.
 
 Two mitigations for false positives, which are inherent to filesystem signals:
 
@@ -280,12 +312,34 @@ configuration surface:
   instead of playing, so mappings can be checked by clicking around an app
   without noise.
 - `spoon.PlatinumSnd:audition()` plays all 68 sounds in sequence with names
-  printed. This is how the `fral` / `fcpd` / `fdon` / `fdof` decoding gaps get
-  closed.
+  printed.
+
+The decoding gaps this section was written to close were instead closed from
+Apple's own header — see `sound-decode.md`. Auditioning remains worth doing to
+confirm each file sounds like its name says, but it is no longer how the
+meanings get established.
 
 ## Unverified assumptions
 
-Recorded so implementation can confirm rather than inherit them:
+Recorded so implementation could confirm rather than inherit them. Several were
+settled during the build, from Hammerspoon's documentation and source rather
+than from a Mac:
+
+- **Settled.** The pack's names are Apple `ThemeSoundKind` four-char codes; 60
+  of the 68 map to a documented constant and the other 8 are sound-track
+  internals, every one of them a continuous sound. See `sound-decode.md`.
+- **Settled.** `AXFrame` is pushed as a flat table with numeric `x`, `y`, `w`,
+  `h` (`extensions/axuielement/common.m`).
+- **Settled.** A messaging timeout set on the system-wide element becomes the
+  global default, and elements without their own timeout resolve to it — so
+  bounding it once at construction covers every subsequent AX call.
+- **Settled.** `hs.window.filter`'s default rule restricts to standard, visible
+  windows, which made three sounds unreachable until the rule was replaced. It
+  runs observers rather than a poll, so it carries no standing AX cost.
+- **Settled.** `hs.timer` stops a timer whose callback raises, so both repeating
+  callbacks are `pcall`-wrapped.
+
+Still genuinely unverified, and all of them macOS-only:
 
 - Hammerspoon's docs do not state whether an `hs.eventtap` callback blocks event
   delivery, nor whether macOS disables slow taps. The design assumes standard
