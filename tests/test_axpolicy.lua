@@ -4,14 +4,15 @@ local axpolicy = require("axpolicy")
 local t = runner.suite("axpolicy")
 
 local TUNING = {
-  cacheMaxAgeSeconds     = 0.25,
-  cacheTolerancePx       = 4,
-  cacheRevalidateSeconds = 2,
-  breakerThreshold       = 3,
-  breakerWindowSeconds   = 10,
-  breakerCooldownSeconds = 30,
-  probeBudgetSeconds     = 0.1,
-  probeWindowSeconds     = 1,
+  cacheMaxAgeSeconds         = 0.25,
+  cacheTolerancePx           = 4,
+  cacheRevalidateSeconds     = 2,
+  containerRevalidateSeconds = 0.2,
+  breakerThreshold           = 3,
+  breakerWindowSeconds       = 10,
+  breakerCooldownSeconds     = 30,
+  probeBudgetSeconds         = 0.1,
+  probeWindowSeconds         = 1,
 }
 
 local function cache(over)
@@ -164,16 +165,28 @@ local function probed(over)
   return c
 end
 
+-- The ceiling arrives as an argument rather than being looked up, because
+-- the hover loop applies two of them: the generous one below for a cached
+-- leaf role, and a much shorter one for a container, whose frame can enclose
+-- children the cache knows nothing about.
+local CEILING = TUNING.cacheRevalidateSeconds
+
 t.test("a recently probed cache needs no revalidation", function()
-  runner.eq(axpolicy.needsRevalidation(probed(), 1001.0, TUNING), false)
+  runner.eq(axpolicy.needsRevalidation(probed(), 1001.0, CEILING), false)
 end)
 
 t.test("a cache probed beyond the ceiling needs revalidation", function()
-  runner.isTrue(axpolicy.needsRevalidation(probed(), 1002.1, TUNING))
+  runner.isTrue(axpolicy.needsRevalidation(probed(), 1002.1, CEILING))
 end)
 
 t.test("exactly at the ceiling does not yet need revalidation", function()
-  runner.eq(axpolicy.needsRevalidation(probed(), 1002.0, TUNING), false)
+  runner.eq(axpolicy.needsRevalidation(probed(), 1002.0, CEILING), false)
+end)
+
+t.test("a shorter ceiling expires a cache the long one would keep", function()
+  local short = TUNING.containerRevalidateSeconds
+  runner.eq(axpolicy.needsRevalidation(probed(), 1000.1, CEILING), false)
+  runner.isTrue(axpolicy.needsRevalidation(probed(), 1000.3, short))
 end)
 
 -- The ceiling must read probedAt, not at. A cache kept alive by a long run
@@ -182,11 +195,11 @@ end)
 -- ceiling exists to bound.
 t.test("a long run of elisions still trips the ceiling", function()
   runner.isTrue(axpolicy.needsRevalidation(probed({at = 1009.9}), 1010.0,
-                                           TUNING))
+                                           CEILING))
 end)
 
 t.test("a nil cache needs revalidation", function()
-  runner.isTrue(axpolicy.needsRevalidation(nil, 1000.0, TUNING))
+  runner.isTrue(axpolicy.needsRevalidation(nil, 1000.0, CEILING))
 end)
 
 -- Spelled out rather than built with probed({probedAt = nil}): a nil value
@@ -194,33 +207,56 @@ end)
 -- been a silent no-op and this case would have tested nothing.
 t.test("a cache with no probedAt needs revalidation", function()
   local unprobed = {role = "AXButton", pid = 42, x = 100, y = 200, at = 1000.0}
-  runner.isTrue(axpolicy.needsRevalidation(unprobed, 1000.0, TUNING))
+  runner.isTrue(axpolicy.needsRevalidation(unprobed, 1000.0, CEILING))
 end)
 
--- Whether a role change earns its exit/enter pair. The third argument is
--- what stops a hung app or a tripped breaker sounding like the cursor left
--- a control it is still sitting on.
-t.test("a changed role after a successful probe sounds", function()
-  runner.isTrue(axpolicy.transitionSounds("AXButton", "AXCheckBox", true))
+-- Whether a move has earned its exit/enter pair. The frame is the element's
+-- identity: two menu items differ by frame though both are AXMenuItem, and
+-- the same widget re-probed comes back with the frame it had. Comparing
+-- roles alone would blip once on the first menu item and never again, when
+-- blipping on every item is the whole character of the sound.
+local A = {x = 0, y = 0, w = 10, h = 10}
+local B = {x = 0, y = 10, w = 10, h = 10}
+
+t.test("a changed role sounds", function()
+  runner.isTrue(axpolicy.transitionSounds("AXButton", A, "AXCheckBox", B))
 end)
 
-t.test("an unchanged role after a successful probe is silent", function()
-  runner.eq(axpolicy.transitionSounds("AXButton", "AXButton", true), false)
+t.test("the same role in a different frame sounds", function()
+  runner.isTrue(axpolicy.transitionSounds("AXMenuItem", A, "AXMenuItem", B))
+end)
+
+t.test("the same role in an identical frame is silent", function()
+  runner.eq(axpolicy.transitionSounds("AXMenuItem", A, "AXMenuItem",
+                                      {x = 0, y = 0, w = 10, h = 10}), false)
 end)
 
 t.test("arriving from no previous role sounds", function()
-  runner.isTrue(axpolicy.transitionSounds(nil, "AXButton", true))
+  runner.isTrue(axpolicy.transitionSounds(nil, nil, "AXButton", A))
 end)
 
--- The bug this predicate exists for: the probe came back empty, so the role
--- looks like it changed to nothing, but nothing is known to have moved.
-t.test("a failed probe never sounds, however different the role", function()
-  runner.eq(axpolicy.transitionSounds("AXButton", nil, false), false)
+-- The probe came back empty, so the role looks like it changed to nothing,
+-- but nothing is known to have moved. "Could not ask" is not "left".
+t.test("a probe that answered nothing never sounds", function()
+  runner.eq(axpolicy.transitionSounds("AXButton", A, nil, nil), false)
+  runner.eq(axpolicy.transitionSounds(nil, nil, nil, nil), false)
 end)
 
-t.test("a failed probe with no previous role is silent too", function()
-  runner.eq(axpolicy.transitionSounds(nil, nil, false), false)
+-- Frames are optional: not every element publishes AXFrame. With one
+-- missing there is no identity to compare, so the roles decide alone.
+t.test("a missing frame on either side falls back to the roles", function()
+  runner.eq(axpolicy.transitionSounds("AXMenuItem", nil, "AXMenuItem", B),
+            false)
+  runner.eq(axpolicy.transitionSounds("AXMenuItem", A, "AXMenuItem", nil),
+            false)
+  runner.isTrue(axpolicy.transitionSounds("AXButton", nil, "AXCheckBox", nil))
 end)
+
+t.test("a malformed frame is treated as no identity, not as a move",
+  function()
+    runner.eq(axpolicy.transitionSounds("AXMenuItem", {}, "AXMenuItem", {}),
+              false)
+  end)
 
 -- Regression guard. Every case above feeds TUNING, whose values are the
 -- production ones, so a module that inlined those same literals and ignored
@@ -287,11 +323,14 @@ t.test("the probe budget and window are read from tuning, not inlined", function
   runner.eq(rich:isOverBudget(100.4), false)
 end)
 
-t.test("cacheRevalidateSeconds is read from tuning, not inlined", function()
-  local patient = tuned({cacheRevalidateSeconds = 60})
-  runner.eq(axpolicy.needsRevalidation(probed(), 1005.0, patient), false)
-  local eager = tuned({cacheRevalidateSeconds = 0.5})
-  runner.isTrue(axpolicy.needsRevalidation(probed(), 1001.0, eager))
-end)
+-- needsRevalidation takes its ceiling as an argument rather than a tuning
+-- table, so the guard is that it honours the number it was handed. Which of
+-- the two tuning ceilings applies is the hover loop's decision, and that
+-- lives outside this suite.
+t.test("the revalidation ceiling is the argument, not an inlined constant",
+  function()
+    runner.eq(axpolicy.needsRevalidation(probed(), 1005.0, 60), false)
+    runner.isTrue(axpolicy.needsRevalidation(probed(), 1001.0, 0.5))
+  end)
 
 return t

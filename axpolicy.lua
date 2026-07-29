@@ -45,27 +45,53 @@ end
 -- change under a resting cursor -- a button replaced in place by a progress
 -- bar keeps the same bounds and reports a different role. So `probedAt`
 -- records when an app was last actually asked, an elision never touches it,
--- and this caps the drift at cacheRevalidateSeconds.
+-- and this caps the drift.
+--
+-- The ceiling arrives as an argument because the caller applies two of
+-- them. A cached leaf role gets a generous one: its frame cannot enclose a
+-- child with a different role, so containment really does mean the answer
+-- has not changed. A cached container gets a short one, because its frame
+-- encloses children the cache has never seen and containment there is only
+-- an approximation.
 --
 -- A cache with no probedAt at all reads as due, so any path that builds one
 -- without going through a probe degrades to asking rather than to trusting.
-function axpolicy.needsRevalidation(cache, now, tuning)
+function axpolicy.needsRevalidation(cache, now, ceilingSeconds)
   if not cache then return true end
   if type(cache.probedAt) ~= "number" then return true end
-  return now - cache.probedAt > tuning.cacheRevalidateSeconds
+  return now - cache.probedAt > ceilingSeconds
 end
 
--- Whether a role change has earned its exit/enter pair.
+local function sameRect(a, b)
+  return a.x == b.x and a.y == b.y and a.w == b.w and a.h == b.h
+end
+
+-- Whether a move has earned its exit/enter pair.
 --
--- A probe that could not answer -- a hung app, a tripped breaker, a budget
--- overrun -- comes back with no role at all, which looks identical to the
--- cursor having moved onto nothing. It is not: "could not ask" is not "the
--- cursor left the widget". Sounding an exit there gives a phantom blip on a
--- control the pointer is still resting on, so only a probe that actually
--- answered may drive a transition.
-function axpolicy.transitionSounds(previousRole, newRole, probeSucceeded)
-  if not probeSucceeded then return false end
-  return previousRole ~= newRole
+-- The frame is the element's identity. Roles alone are too coarse: every
+-- element in a menu is AXMenuItem, so a role comparison blips once on the
+-- first item and stays silent all the way down, when blipping on every item
+-- is the whole character of the sound. Two different items have different
+-- frames; one widget re-probed comes back with the frame it had, so a
+-- revalidation of something the cursor never left stays silent.
+--
+-- A newRole of nil means the probe could not answer -- hung app, tripped
+-- breaker, budget overrun -- which is not the same as the cursor having
+-- moved onto nothing. "Could not ask" is not "left", and sounding an exit
+-- there gives a phantom blip on a control the pointer is still resting on.
+--
+-- Frames are optional: not every element publishes AXFrame. With one
+-- missing, or malformed, there is no identity to compare and the roles
+-- decide alone -- which errs towards silence rather than towards a blip on
+-- every tick.
+function axpolicy.transitionSounds(previousRole, previousFrame,
+                                   newRole, newFrame)
+  if newRole == nil then return false end
+  if previousRole ~= newRole then return true end
+  if type(previousFrame) ~= "table" or type(newFrame) ~= "table" then
+    return false
+  end
+  return not sameRect(previousFrame, newFrame)
 end
 
 local Breaker = {}
