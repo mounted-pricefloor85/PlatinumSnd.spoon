@@ -1,7 +1,7 @@
 # PlatinumSnd — Mac verification checklist
 
 Every line of this Spoon that touches Hammerspoon was written on a Linux
-machine with no macOS. The pure logic has 116 passing assertions; **none of the
+machine with no macOS. The pure logic has 123 passing assertions; **none of the
 `hs` code has ever executed**. This is the ordered list for the first real run.
 
 Ordered by what a failure costs, not by task number. Work down it. If something
@@ -72,6 +72,19 @@ could not reach.
 Read the report bottom-up: the summary lists only the FAIL and WARN lines.
 `[----]` means not tested — usually a role that was not on screen, which is a
 gap in the test rather than a defect.
+
+**What it touches.** The cursor, which Phase C moves over the controls it finds
+and puts back; this Spoon's own state, which it silences and restarts; and the
+report file. It opens, closes, moves and focuses **no** window — including the
+Console, which is why E1 and E2 read `[SKIP]` when you run `:diagnose()` from
+the Console you already had open. It writes no other file, never clicks or
+types, and never acts on an accessibility element: it reads and it hovers, so
+apps may show a tooltip as the cursor passes and nothing more. If Calculator is
+not running it is launched in the background and quit again, for `flap`.
+
+Two things happen only under `{guided = true}`: the steps that ask you to act,
+and one step that creates and removes a single scratch file on your Desktop —
+printing the exact path before it does either.
 
 ## The two diagnostic tools
 
@@ -438,7 +451,16 @@ a tuning change.
 
 - [ ] **3.20 Menu open and close.** Pull down a menu, then dismiss another with
     Escape.
-  - Expect: `mnuo` on open, `mnuc` on dismissal.
+  - Expect: `mnuo` on open, `mnuc` on dismissal — and on the press, **`mnuo`
+    alone**. `AXMenuBarItem` and `AXMenu` are mapped to silence, so the menu
+    bar no longer layers `btnp` on the press and `btnr` on the release around
+    the observer's sound. Three sounds for one gesture, on the most frequent
+    gesture in the shell, was the defect.
+  - Fails: a click either side of `mnuo` means the role under the cursor is not
+    `AXMenuBarItem` — confirm with the 2.1 snippet parked on a menu title.
+  - **Knowingly accepted:** menu extras and status items belong to accessory
+    apps, which get no observer (`kind() ~= 1`), so there is no `mnuo` to defer
+    to and those menus are now **silent** rather than wrong. Expected.
   - Fails: `mnuc` missing for a given app is **expected and known** — not every
     app emits `AXMenuClosed`. Record which apps do and do not. `mnuo` missing
     everywhere is 2.5.
@@ -591,6 +613,26 @@ a tuning change.
   - If it grates, the fix is requiring the press to have landed on an
     image-or-icon element, which is an untested heuristic nobody wanted to
     invent blind.
+  - **Scope.** Window move and resize used to fail the same way and no longer
+    do — `src_windows` publishes that the focused window's frame is actually
+    moving, and `src_pointer` skips both the drop probe and its transition
+    sounds while it is set. A rubber band moves no window, so it is not covered
+    by that and remains the open case. See 4.11.
+
+- [ ] **4.11 Dragging a Finder window is one sound, not three.** Drag a Finder
+    window by its title bar across other Finder windows and release. Then
+    resize one from its left or top edge. Then repeat both with a non-Finder
+    app's window.
+  - Expect: the `wmov` loop and **nothing else** — no `fdrp` on release, no
+    `fdon`/`fdof` while crossing, no `btne`/`btnx` either.
+  - Fails: an `fdrp` on release means the published flag is not reaching
+    `src_pointer` — check that `src_windows` started at all, since a source
+    that fails to start never writes it and the layer degrades to its old
+    behaviour. Intermittent `fdrp` (some drags, not others) would mean the
+    clear had moved back onto the release, where it races the reader.
+  - Then confirm the suppression is confined to the gesture: after a window
+    drag, hover an ordinary button. `btne`/`btnx` must still sound. Silence
+    there means the flag is being read outside an open gesture.
 
 ---
 
@@ -677,14 +719,21 @@ a tuning change.
     hs.window.filter.new():getWindows()
     ```
 
-  - Expect: no truncated or empty results. `Probe:release()` resets the
-    system-wide element's timeout to `0.0`, which Hammerspoon documents as
-    restoring the global default.
+  - Expect: no truncated or empty results. `obj:stop()` calls
+    `axprobe.resetTimeout`, which sets the system-wide element's timeout to
+    `0.0` — what Hammerspoon documents as restoring the global default.
   - Fails: the 50 ms bound is a **process-global** mutation. If it is not
     handed back it outlives the Spoon and keeps applying to `hs.window`,
     `hs.uielement` and every other AX consumer in Hammerspoon. There is no
     getter for it, so the realistic check is that `hs.window` behaves after a
     PlatinumSnd stop the way it did before PlatinumSnd was ever started.
+  - The install and the reset both log at error level if they throw, so check
+    the Console before concluding from behaviour alone.
+  - **Ownership moved.** This used to be `Probe:release()`, called from
+    `src_pointer:stop()`. The bound is process-global and `src_windows` and
+    `src_keys` rely on it too, so it is now installed in `obj:start()` before
+    any source starts and reset in `obj:stop()` after all of them stop. One
+    owner, and it is not a source.
 
 - [ ] **5.11 Idle CPU.** With the Spoon running and nothing happening, compare
     Hammerspoon's CPU use against a run with the Spoon stopped.

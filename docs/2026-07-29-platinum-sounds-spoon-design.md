@@ -1,7 +1,24 @@
 # PlatinumSnd.spoon — design
 
 Date: 2026-07-29
-Status: approved, not yet implemented
+Status: **implemented.** This is the design as approved, revised in place where
+implementation disproved it; sections carrying a "revised after implementation"
+note are the ones that moved.
+
+**This document is not the authority on behaviour.** Two others outrank it:
+
+- **`sound-decode.md`** settles what every sound *means*. The pack's names are
+  Apple `ThemeSoundKind` four-char codes, which retired several mappings this
+  document originally guessed at. Where the two disagree, the decode governs.
+- **`mac-verification.md`** is the record of what has actually been *checked*.
+  Every `hs` call in this Spoon was written on Linux and none of it has run on
+  a Mac, so that document holds the ordered first-run list, the load-bearing
+  assumptions still unverified, and the deliberate trade-offs filed under
+  "Known judgement calls". Where this document describes intent and that one
+  describes an observed or accepted behaviour, that one governs.
+
+Read this for *why* the design is shaped the way it is. Read those two for what
+the thing does.
 
 ## Goal
 
@@ -70,24 +87,41 @@ exposed as settings.
 
 ## Layout
 
+Revised after implementation: the pure decision modules were split out of the
+files that call them, so they could be tested without Hammerspoon.
+
 ```
 PlatinumSnd.spoon/
-  init.lua          lifecycle, hotkey, wiring
-  sound.lua         preload, pooling, playback        (shared service)
-  axprobe.lua       hit-test, timeout, circuit breaker (shared service)
-  src_pointer.lua   click tap + hover cache + enter/exit
+  init.lua          lifecycle, tuning table, hotkey, wiring; owns the
+                    process-wide AX messaging timeout
+  soundmap.lua      PURE. semantic name -> pack base name
+  resolver.lua      PURE. base name -> on-disk path, WAV then MP3
+  rolemap.lua       PURE. AX role + action -> semantic name; leafness
+  axpolicy.lua      PURE. cache staleness, frame containment, revalidation
+                    ceiling, role refinement, circuit breaker, probe budget
+  fgate.lua         PURE. Finder burst coalescing and frontmost gate
+  sound.lua         preload, pooling, one-shot + sustained playback
+  axprobe.lua       hit-test and attribute reads, bounded; wraps axpolicy's
+                    breaker                            (shared service)
+  src_pointer.lua   click tap + hover cache + enter/exit + gestures
+  src_windows.lua   window filter, disks, app launch, window drag
   src_menus.lua     per-pid observer fleet
-  src_windows.lua   window filter, app switch
   src_finder.lua    Finder AX + path watchers
+  src_keys.lua      default button on Return
+  diagnose.lua      on-demand diagnostic harness
   snd/              moved from Spoons/platinumsnd/snd/
   docs/
+  tests/            the pure suites, run under stock lua
 ```
 
-Each source exposes `:start()` and `:stop()` and nothing else. The six sources
-have different failure modes — the hover layer can stall on a hung app, the
-Finder watcher can false-positive, the observer fleet can leak — so isolating
-them behind a uniform interface means a misbehaving source can be disabled
-individually while bisecting.
+Each source exposes `:start()` and `:stop()` and nothing else. The **five**
+sources have different failure modes — the hover layer can stall on a hung app,
+the Finder watcher can false-positive, the observer fleet can leak — so
+isolating them behind a uniform interface means a misbehaving source can be
+disabled individually while bisecting. `init.lua` hands each the same context
+table, which is also how the one fact two sources must share travels: the
+window source publishes that a window is being dragged, and the pointer source
+reads it so a window move is not also reported as a file drop.
 
 ## Sound engine
 
@@ -203,8 +237,16 @@ apps raises both.
 
 ## Guardrails
 
-`axprobe` sets a 50 ms AX messaging timeout. `hs.axuielement:setTimeout()` takes
-**seconds**, so the value is `0.05`.
+A 50 ms AX messaging timeout is set on the system-wide element, which makes it
+the default for every AX message the process sends.
+`hs.axuielement:setTimeout()` takes **seconds**, so the value is `0.05`.
+
+Revised after implementation: **`init.lua` owns it**, not `axprobe`. The bound
+is process-global and three sources rely on it — the pointer probe, the window
+source's frame and subrole reads, and the key source's subrole read — so
+installing it from any one source's constructor made the other two depend on
+that source having started. It is installed in `:start()` before any source
+starts and handed back in `:stop()` after all of them stop.
 
 **Per-pid circuit breaker.** Three timeouts or errors from one pid within a
 rolling 10-second window cuts that pid off from probing for 30 seconds, logged
@@ -212,7 +254,16 @@ once rather than repeatedly. A cut-off app still gets generic click sounds from 
 path; it just stops being interrogated.
 
 **Global budget.** If total probe time in any one-second window exceeds ~100 ms,
-hover polling backs off to a slower interval until it recovers.
+probing stops until it recovers.
+
+Revised after implementation: this section originally specified backing the
+hover poll off to a slower interval. What shipped **skips the probe entirely**
+while over budget — `roleAt` returns no role and the hover loop leaves the whole
+cache untouched, stamps included, so the next tick tries again rather than
+settling for the failure. Changing the timer's interval would have meant
+restarting the timer from inside its own callback; declining to probe reaches
+the same spend with none of that, and it keeps the recovery test in one pure
+function.
 
 Every number here is a starting point chosen to be tunable in one place, not a
 measured value. The breaker exists precisely because which apps are slow cannot
