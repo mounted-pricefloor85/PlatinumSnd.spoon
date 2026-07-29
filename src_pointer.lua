@@ -58,6 +58,32 @@ local function clickSemantic(role, action, point, frame)
   return rolemap.semantic(role, action)
 end
 
+-- Whether the gesture in progress is moving a window, as reported by
+-- src_windows.
+--
+-- That source samples the focused window's frame under a held button and
+-- publishes the moment the frame is actually seen to move, so this is "a
+-- window move or resize is under way" rather than "a button is down". It is
+-- the only thing that separates dragging a Finder window from dragging a file
+-- in one: both hold the button, both travel, and both end over Finder.
+--
+-- Read through the shared context table rather than passed in, because the two
+-- sources are started independently and neither may reach into the other. A
+-- src_windows that failed to start never writes it, and nil reads as false --
+-- which is the behaviour this layer had before the flag existed.
+--
+-- GATED ON A GESTURE BEING OPEN. src_windows clears the flag on the press
+-- rather than the release, deliberately: both sources tap leftMouseUp and
+-- nothing orders two taps against each other, so clearing on the release would
+-- race this read and drop the fix intermittently. The price is that the flag
+-- stays true after a window drag until the next press, and `dragStart` is what
+-- confines the answer to the gesture it describes -- without it, every hover
+-- after a window drag would be silent.
+local function windowDragging(self)
+  return self.dragStart ~= nil and self.ctx ~= nil
+    and self.ctx.windowDragging == true
+end
+
 -- Silence whatever a gesture is sustaining and forget the gesture. Safe to
 -- call with none in progress and after a partial start(), which is what
 -- makes it usable from the tap, from the watchdog and from stop().
@@ -107,6 +133,9 @@ end
 local function endGesture(self, point)
   local start = self.dragStart
   local wasThumb = self.thumbDragging
+  -- Read BEFORE clearGesture, which nils `dragStart` -- and windowDragging is
+  -- gated on that being set, so asking afterwards would always answer false.
+  local movingWindow = windowDragging(self)
   -- A gesture that sustained anything owns its own release however far it
   -- travelled: the decay is the sound of letting a thumb go, and a ghost
   -- drag nudged three pixels is still a ghost drag rather than a click.
@@ -119,6 +148,21 @@ local function endGesture(self, point)
   local threshold = self.tuning.dragThresholdPx
   if dx * dx + dy * dy <= threshold * threshold then return owned end
 
+  -- A window move is not a drop. Dragging a Finder window by its title bar
+  -- releases over that same Finder window, which is precisely what the hit
+  -- test below asks, so without this every Finder window move -- and every
+  -- resize, which travels the same way -- would end in `fdrp`. src_windows
+  -- publishes `windowDragging` the moment it sees the focused window's frame
+  -- actually change, which is the one fact available here that tells the two
+  -- gestures apart.
+  --
+  -- WHAT THIS DOES NOT COVER. Rubber-band selection on the Desktop moves no
+  -- window, so it still reads as a drop and still sounds `fdrp`. That is a
+  -- known risk recorded at 4.10 in docs/mac-verification.md, and nothing
+  -- available at a release distinguishes "let go of a file" from "finished
+  -- sweeping a selection". This fix is window move and resize, and no more.
+  if movingWindow then return true end
+
   -- `fdrp` is kThemeSoundReceiveDrop: something let go over a Finder window.
   -- The hit test is an accessibility call, so it happens on a later tick --
   -- nothing on this path may delay the user's own mouse-up. The probe and
@@ -129,7 +173,10 @@ local function endGesture(self, point)
   local x, y = point.x, point.y
   hs.timer.doAfter(0, function()
     if not self.tap or not probe then return end
-    local finder = hs.application.get("Finder")
+    -- By bundle identifier, not by display name. `hs.application.get` would
+    -- match "Finder" against a localised or user-renamed app, and the same
+    -- constant is what frontmostIsFinder and src_finder already test.
+    local finder = hs.application.get(FINDER_BUNDLE)
     if not finder then return end
     if probe:pidAt(x, y) == finder:pid() then engine:play("finder.drop") end
   end)
@@ -140,7 +187,16 @@ function src:start(ctx)
   self.engine = ctx.engine
   self.tuning = ctx.tuning
   self.log = ctx.log
-  self.probe = axprobe.new(ctx.tuning, ctx.log)
+  -- Held whole, for windowDragging above. init.lua builds one context per
+  -- start() and hands the same table to every source, so what src_windows
+  -- writes there is what this reads -- no ordering dependency between the two,
+  -- and no source reaching into another's fields.
+  self.ctx = ctx
+  -- No log argument: the probe reports through its counters and its breaker.
+  -- The process-wide AX messaging bound this probe relies on is installed by
+  -- init.lua before any source starts, because src_windows and src_keys rely
+  -- on it too and must not depend on this source having started.
+  self.probe = axprobe.new(ctx.tuning)
   self.cache = nil
   -- Where the held button went down, and which loops that press opened.
   -- Cleared together, always through clearGesture.
@@ -261,12 +317,27 @@ function src:start(ctx)
                     frame = frame, at = sampled, probedAt = sampled}
     end
 
+    -- Moving a window is src_windows' gesture to describe, and it is already
+    -- describing it with the `wmov` loop. Every crossing the cursor makes
+    -- while carrying a window is part of that one gesture, so nothing here
+    -- sounds for it -- not `fdon`/`fdof`, not the button enter/exit pair.
+    -- Sounding either would layer a second and third description of a single
+    -- drag on top of the loop, which is the rattle this suppression exists to
+    -- remove.
+    --
+    -- Covers window MOVE and RESIZE, both of which change the frame
+    -- src_windows samples. It does NOT cover rubber-band selection on the
+    -- Desktop, which moves no window and so still crosses elements audibly --
+    -- a known risk recorded at 4.10 in docs/mac-verification.md.
+    local movingWindow = windowDragging(self)
+
     -- Transitions are by element, using the frame as identity, so sliding
     -- down a menu blips on every item rather than only the first -- every
     -- one of them is AXMenuItem, and a role comparison could not tell them
     -- apart. Sweeping a toolbar therefore blips per button too; the 60 ms
     -- poll is what keeps that from becoming machine-gun fire.
-    if axpolicy.transitionSounds(previous, previousFrame, role, frame) then
+    if not movingWindow
+      and axpolicy.transitionSounds(previous, previousFrame, role, frame) then
       -- Mid-drag in the Finder a crossing means something else. `fdon` and
       -- `fdof` are kThemeSoundFinderDragOnIcon/OffIcon: the cursor passing
       -- over a droppable icon with something in hand. They REPLACE the
@@ -302,10 +373,20 @@ function src:start(ctx)
       local now = hs.timer.secondsSinceEpoch()
       local pid = frontmostPid()
 
-      -- The hover loop has usually just answered this. Staleness here stays
-      -- the age-and-tolerance rule, untouched by the frame elision above:
-      -- the frame says where the widget is, not how long ago the app
-      -- confirmed it was still there.
+      -- The hover loop has usually just answered this. The test is still the
+      -- age-and-tolerance rule -- `cacheMaxAgeSeconds` and
+      -- `cacheTolerancePx` -- but note what the elision above feeds it: a
+      -- successful elision writes `cached.at` AND `cached.x`/`cached.y`, which
+      -- is two of the three things isCacheUsable tests. So for a cursor moving
+      -- inside one widget this rule is satisfied continuously, and 250 ms is
+      -- NOT the bound on how long ago the app confirmed the role.
+      --
+      -- That bound is the revalidation ceiling instead: `cacheRevalidateSeconds`
+      -- (2 s) over a leaf, `containerRevalidateSeconds` (0.2 s) over a
+      -- container, both measured from `probedAt`, which no elision touches.
+      -- Intended -- it is what keeps a click after a quarter-second of
+      -- movement off the deferred probe -- and worth stating plainly, because
+      -- the two numbers are an order of magnitude apart.
       local usable = axpolicy.isCacheUsable(self.cache, now, point.x, point.y,
                                             pid, self.tuning)
       local cached = usable and self.cache or nil
@@ -351,13 +432,14 @@ function src:stop()
   -- leave a loop playing with nothing left alive to release it. No decay
   -- here -- the toggle means silence now, not a flourish on the way out.
   clearGesture(self)
-  -- Hand the AX messaging timeout back before dropping the probe. It is a
-  -- process-global default, so leaving it set would keep this Spoon's 50 ms
-  -- bound on hs.window and every other AX consumer long after the toggle
-  -- hotkey was supposed to make us inert.
-  if self.probe then self.probe:release(); self.probe = nil end
+  -- Just dropped, not released. The AX messaging timeout is process-global and
+  -- three sources depend on it, so handing it back is init.lua's job once
+  -- every source has stopped -- doing it here would have unbounded the others
+  -- while they were still running.
+  self.probe = nil
   self.cache = nil
   self.lastX, self.lastY = nil, nil
+  self.ctx = nil
 end
 
 return src

@@ -24,12 +24,46 @@ local function isPalette(win)
   return ok and subrole == FLOATING
 end
 
+-- Publish "the focused window has been seen to move under the held button" on
+-- the shared context table.
+--
+-- This source owns the fact; src_pointer is the one that needs it. Dragging a
+-- Finder window by its title bar releases over that very Finder window, which
+-- is exactly the test the drop probe applies, so without this every Finder
+-- window move would end in `fdrp` and every frame crossing during it would
+-- blip `fdon`/`fdof` on top of the `wmov` loop. One gesture, three
+-- descriptions, from two sources that could not see each other.
+--
+-- `ctx` is the table init.lua builds once per start() and hands to every
+-- source, so the write is visible to a src_pointer that was started before
+-- this source was. Guarded on self.ctx, because the callers must stay callable
+-- after a partial start() -- the same reason endDrag already tolerates no
+-- engine. A src_windows that failed to start therefore leaves the flag unset,
+-- and src_pointer degrades to exactly the behaviour it had before this
+-- existed.
+--
+-- CLEARED ON MOUSE-DOWN, NEVER ON MOUSE-UP, and that is load-bearing. Both
+-- this source and src_pointer tap leftMouseUp, and nothing orders two taps in
+-- one process against each other. Clearing here on the release would race the
+-- reader: whenever this tap won, src_pointer's endGesture would see a cleared
+-- flag and sound the drop after all, intermittently. Clearing on the press
+-- instead puts the write a whole gesture ahead of every read, so the order the
+-- two taps happen to run in stops mattering.
+--
+-- The cost is that the flag stays true between the end of a window drag and
+-- the next press. src_pointer gates both its readers on having a gesture open,
+-- so nothing consults it in that gap.
+local function publishDragging(self, value)
+  if self.ctx then self.ctx.windowDragging = value end
+end
+
 -- Arm the frame sampler for the gesture that just began. Deliberately reads
 -- no frame: the first tick records the baseline the second one compares
 -- against, so nothing is asked of another process from inside the event tap.
 local function beginDrag(self)
   self.lastFrame = nil
   self.dragging = false
+  publishDragging(self, false)
   if self.dragTimer and not self.dragTimer:running() then
     self.dragTimer:start()
   end
@@ -38,6 +72,11 @@ end
 -- Disarm, and silence whatever the gesture was sustaining. Safe to call when
 -- no drag is in progress and after a partial start(), which is what makes it
 -- usable from both the tap and stop().
+--
+-- `self.dragging` resets here because sampleDrag's idle branch keys off it and
+-- would otherwise sound `wmov idle` on the next plain button hold. The
+-- published flag deliberately does NOT reset here; see publishDragging above
+-- for why the clear belongs on the press.
 local function endDrag(self)
   if self.dragTimer then self.dragTimer:stop() end
   if self.engine then
@@ -70,6 +109,7 @@ local function sampleDrag(self)
       self.engine:release("window.move")
       self.engine:sustain("window.moving")
       self.dragging = true
+      publishDragging(self, true)
     elseif self.dragging then
       -- Only once movement has actually been seen. A plain click on a button
       -- holds the mouse down too, and must stay silent here.
@@ -84,6 +124,10 @@ function src:start(ctx)
   self.engine = ctx.engine
   self.tuning = ctx.tuning
   self.log = ctx.log
+  -- Held for publishDragging above, which publishes the window-drag fact that
+  -- src_pointer reads. The whole table, not a copy of a field: the point is
+  -- that both sources see the same one.
+  self.ctx = ctx
 
   -- Which windows were palettes when they opened. Consulted at destruction,
   -- when the subrole can no longer be read.
@@ -191,6 +235,7 @@ function src:start(ctx)
   -- below runs it only between a left button going down and coming back up.
   -- With no button held there is no timer scheduled and no AX traffic at all.
   self.dragging = false
+  publishDragging(self, false)
   -- Wrapped, because an hs.timer stops itself for good on an unhandled error
   -- and this body can realistically throw: focusedWindow() can hand back a
   -- window whose app dies before frame() is called, and indexing the nil that
@@ -224,12 +269,25 @@ function src:stop()
   -- looping sound playing with nothing left alive to release it.
   endDrag(self)
   if self.dragTimer then self.dragTimer:stop(); self.dragTimer = nil end
-  if self.filter then self.filter:unsubscribeAll(); self.filter = nil end
+  -- `delete()` rather than `unsubscribeAll()`. start() builds a fresh
+  -- hs.window.filter every time, and a filter instance registers itself with
+  -- the module -- dropping the last Lua reference to one is not enough to
+  -- retire it. Unsubscribing silences this instance's callbacks but leaves it
+  -- registered and still watching, so N presses of the toggle hotkey would
+  -- leave N of them behind. `delete()` is the documented full teardown, and
+  -- niling the reference afterwards is what makes stop() idempotent.
+  if self.filter then self.filter:delete(); self.filter = nil end
   if self.volumeWatcher then
     self.volumeWatcher:stop(); self.volumeWatcher = nil
   end
   if self.appWatcher then self.appWatcher:stop(); self.appWatcher = nil end
   self.paletteIds = nil
+  -- endDrag above resets this source's own state but deliberately leaves the
+  -- published flag alone, so clear it here: a stop() landing mid-drag must not
+  -- leave it stuck true on a context src_pointer may still be holding. Then
+  -- drop the reference, which is what makes a second stop() a no-op.
+  publishDragging(self, false)
+  self.ctx = nil
 end
 
 return src
